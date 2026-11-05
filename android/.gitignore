@@ -1,0 +1,16 @@
+# Gradle / Android
+.gradle/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+.cxx/
+
+# 构建产物
+*.apk
+*.aab
+*.keystore
+
+# 系统
+.DS_Store
