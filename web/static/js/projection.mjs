@@ -98,3 +98,51 @@ export function makeProjectorRaw(cx, cy, r, yaw, pitch) {
     };
   };
 }
+
+/*
+makeFlatProjector 创建等距圆柱投影（平面地图模式，类卡巴斯基平铺视图）。
+
+与球体模式的差异：
+  - 没有背面：所有点可见，z 恒为 1，调用方的深度衰减公式因此退化为满亮；
+  - 经度按 panDeg 平移后回绕到 [-180, 180)，横向拖拽时地图左右无缝衔接；
+  - 跨日界线的线段由调用方按相邻点横向跳变（> 半图宽）断笔处理。
+
+参数:
+  - x, y (number): 地图矩形左上角屏幕坐标（CSS 像素）。
+  - w, h (number): 地图矩形宽高（h = w / 2）。
+  - panDeg (number): 视图中心经度偏移（度）。
+
+返回:
+  - project(lat, lon): {x, y, z}（永不为 null）。
+*/
+export function makeFlatProjector(x, y, w, h, panDeg) {
+  return function project(lat, lon) {
+    const d = (((lon - panDeg) % 360) + 540) % 360 - 180;
+    return {
+      x: x + (d + 180) / 360 * w,
+      y: y + (90 - lat) / 180 * h,
+      z: 1,
+    };
+  };
+}
+
+/*
+makeFlatProjectorVec 平面模式的向量投影适配器（反解经纬后走线性投影）。
+
+陆地点阵应使用预解算的经纬度数组避免逐帧三角函数；
+本函数只服务弹道采样点（每帧数百个，开销可忽略）。
+
+参数:
+  - 同 makeFlatProjector。
+
+返回:
+  - projectVec(x, y, z): {x, y, z}（z 恒为 1）。
+*/
+export function makeFlatProjectorVec(x, y, w, h, panDeg) {
+  const p = makeFlatProjector(x, y, w, h, panDeg);
+  return function projectVec(vx, vy, vz) {
+    const lat = Math.asin(Math.max(-1, Math.min(1, vz))) / DEG;
+    const lon = Math.atan2(vy, vx) / DEG;
+    return p(lat, lon);
+  };
+}

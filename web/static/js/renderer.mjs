@@ -23,7 +23,9 @@ renderer.mjs —— 正交投影地球渲染器（深空指挥台版）。
 
 import { SEV, MAX_EVENTS } from './util.mjs';
 import { DEFAULT_LAND_STEP_DEG } from './land.mjs';
-import { makeProjectorVec, makeProjector, toVec } from './projection.mjs';
+import { makeProjectorVec, makeProjector, makeFlatProjector, makeFlatProjectorVec, toVec } from './projection.mjs';
+
+const DEG = Math.PI / 180;
 
 // ── 相机 ──
 const PITCH_BASE = 0.42;        // 初始北极倾斜角（弧度）
@@ -117,15 +119,18 @@ function smoothstep(t) {
 /*
 视觉风格表（顶栏按钮或 V 键循环）。
 
-三档共享红黑基调，差异只在"信息密度"：
+前三个是球体模式下的信息密度档位，第四个切换到平面地图：
   标准  致密点阵 + 经纬网 + 大气辉光（默认，信息量最大）
   极简  稀疏点阵、关掉星空/经纬网/大气（最安静，只留大陆与轨迹）
   点阵  细点阵 + 强光照、无经纬网（复古终端感）
+  平面  等距圆柱投影的平铺世界地图（类卡巴斯基）：无背面剔除，
+        横拖平移经度且左右无缝回绕，全球事件一眼看全
 */
 const STYLES = [
   { name: '标准', dotScale: 0.78, dotAlpha: 0.92, stars: true, graticule: true, atmosphere: true, light: 1.0 },
   { name: '极简', dotScale: 0.52, dotAlpha: 0.48, stars: false, graticule: false, atmosphere: false, light: 0.5 },
   { name: '点阵', dotScale: 0.34, dotAlpha: 0.62, stars: true, graticule: false, atmosphere: true, light: 1.15 },
+  { name: '平面', dotScale: 0.9, dotAlpha: 0.95, stars: true, graticule: true, atmosphere: false, light: 0, flat: true },
 ];
 
 // 红黑主题调色板（全模块唯一色彩来源）。
@@ -181,10 +186,26 @@ export class GlobeRenderer {
       this._landJx[i] = Math.random() * 2 - 1;
       this._landJy[i] = Math.random() * 2 - 1;
     }
+    // 平面模式用的经纬度点阵：从单位向量反解一次并缓存，
+    // 避免每帧对 1.5 万个点做 asin/atan2。
+    this.landLL = null;
+    if (landVectors) {
+      this.landLL = new Float32Array(dots * 2);
+      for (let i = 0; i < dots; i++) {
+        this.landLL[i * 2] = Math.asin(Math.max(-1, Math.min(1, landVectors[i * 3 + 2]))) / DEG;
+        this.landLL[i * 2 + 1] = Math.atan2(landVectors[i * 3 + 1], landVectors[i * 3]) / DEG;
+      }
+    }
     this._landBins = null;   // 深度分桶缓存，复用数组避免每帧分配
 
     this.w = 0; this.h = 0; this.dpr = 1;
     this.cx = 0; this.cy = 0; this.r = 0;
+    // 平面地图矩形与横向平移（度）。
+    this.mapX = 0; this.mapY = 0; this.mapW = 0; this.mapH = 0;
+    this.panLon = 0;
+    // 弹道描边的横向跳变阈值：球体模式无穷大（永不触发），
+    // 平面模式为半图宽（跨日界线的相邻采样点不连线）。
+    this._jumpX = Infinity;
     this.stars = [];
 
     this.yaw = -1.2;          // 初始朝向美洲
@@ -236,6 +257,13 @@ export class GlobeRenderer {
     // 桌面受限于高度（宽屏下半径由 h 决定），窄屏受限于宽度（由 w 决定），
     // 两种约束取小值，任何比例下都不会顶到边界。
     this.r = Math.min(areaW * 0.48, h * (panelW ? 0.40 : 0.36));
+
+    // 平面地图矩形：宽受面板外侧可视区约束，高受视口约束，保持 2:1。
+    const flatW = Math.min(areaW * 0.94, h * 1.44);
+    this.mapW = flatW;
+    this.mapH = flatW / 2;
+    this.mapX = (areaW - flatW) / 2;
+    this.mapY = (h - this.mapH) * (panelW ? 0.52 : 0.46);
 
     this._buildStars();
     this._updateProjectors();
@@ -303,8 +331,16 @@ export class GlobeRenderer {
   // ── 相机与输入 ──
 
   _updateProjectors() {
-    this.projector = makeProjector(this.cx, this.cy, this.r, this.yaw, this.pitch);
-    this.projectorVec = makeProjectorVec(this.cx, this.cy, this.r, this.yaw, this.pitch);
+    if (this._style.flat) {
+      const { mapX, mapY, mapW, mapH, panLon } = this;
+      this.projector = makeFlatProjector(mapX, mapY, mapW, mapH, panLon);
+      this.projectorVec = makeFlatProjectorVec(mapX, mapY, mapW, mapH, panLon);
+      this._jumpX = mapW / 2;
+    } else {
+      this.projector = makeProjector(this.cx, this.cy, this.r, this.yaw, this.pitch);
+      this.projectorVec = makeProjectorVec(this.cx, this.cy, this.r, this.yaw, this.pitch);
+      this._jumpX = Infinity;
+    }
   }
 
   _buildStars() {
@@ -338,6 +374,15 @@ export class GlobeRenderer {
       const t = performance.now();
       const gap = Math.max(1, t - this._lastMoveAt);
       this._lastMoveAt = t;
+
+      if (this._style.flat) {
+        // 平面模式：横拖平移经度（右拖 → 地表右移），回绕到 [-180, 180)；
+        // 纵向拖拽无意义（等距圆柱投影上下就是南北极），直接忽略。
+        // 惯性甩动在平面图上读作"地图打滑"，也不记录。
+        this.panLon = (((this.panLon - dx * 360 / this.mapW) % 360) + 540) % 360 - 180;
+        this.lastDragAt = t;
+        return;
+      }
 
       // 手势跟手：右拖 → 地表右移（yaw 减小）；下拖 → 北极远离观察者。
       this.yaw -= dx * 0.005;
@@ -381,7 +426,8 @@ export class GlobeRenderer {
     - 无。
   */
   _stepCamera(dt, now) {
-    if (this.dragging) return;
+    // 平面模式没有自转与惯性：地图是铺开的仪表板，静止才是正确的"性格"。
+    if (this.dragging || this._style.flat) return;
 
     if (this.flingVel) {
       this.yaw -= this.flingVel * dt;
@@ -418,11 +464,17 @@ export class GlobeRenderer {
     this._arcCache.clear();
 
     this._paintSky(now);
-    this._paintAtmosphere();
-    this._paintSphere();
-    if (this._style.graticule) this._paintGraticule();
-    this._paintLand();
-    this._paintLight();
+    if (this._style.flat) {
+      this._paintMapBg();
+      if (this._style.graticule) this._paintGraticuleFlat();
+      this._paintLandFlat();
+    } else {
+      this._paintAtmosphere();
+      this._paintSphere();
+      if (this._style.graticule) this._paintGraticule();
+      this._paintLand();
+      this._paintLight();
+    }
     this._paintTrails(now);
     this._paintSeeds(now);
 
@@ -627,6 +679,91 @@ export class GlobeRenderer {
   }
 
   /*
+  _paintMapBg 平面地图底板。
+
+  比天空略亮、顶部一层极淡的受光、底部收暗：
+  平面没有球体光照可借，若底板和天空同色系，地图会读成"屏幕上开了个洞"。
+  */
+  _paintMapBg() {
+    const { ctx, mapX, mapY, mapW, mapH } = this;
+    ctx.fillStyle = PALETTE.globe1;
+    ctx.fillRect(mapX, mapY, mapW, mapH);
+    const g = ctx.createLinearGradient(0, mapY, 0, mapY + mapH);
+    g.addColorStop(0, 'rgba(255, 132, 132, 0.05)');
+    g.addColorStop(0.5, 'rgba(0, 0, 0, 0)');
+    g.addColorStop(1, 'rgba(0, 0, 0, 0.22)');
+    ctx.fillStyle = g;
+    ctx.fillRect(mapX, mapY, mapW, mapH);
+    ctx.strokeStyle = 'rgba(235, 108, 126, 0.16)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(mapX + 0.5, mapY + 0.5, mapW - 1, mapH - 1);
+  }
+
+  /*
+  _paintGraticuleFlat 平面经纬网：经纬各 30° 的直线网格。
+  */
+  _paintGraticuleFlat() {
+    const { ctx, mapX, mapY, mapW, mapH } = this;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(mapX, mapY, mapW, mapH);
+    ctx.clip();
+    ctx.strokeStyle = PALETTE.grid;
+    ctx.lineWidth = 0.7;
+    for (let lon = -150; lon <= 150; lon += 30) {
+      const x = this.projector(0, lon).x;
+      ctx.beginPath();
+      ctx.moveTo(x, mapY);
+      ctx.lineTo(x, mapY + mapH);
+      ctx.stroke();
+    }
+    for (let lat = -60; lat <= 60; lat += 30) {
+      const y = this.projector(lat, 0).y;
+      ctx.beginPath();
+      ctx.moveTo(mapX, y);
+      ctx.lineTo(mapX + mapW, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /*
+  _paintLandFlat 平面陆地点阵。
+
+  与球体版的三点差异：
+    1. 数据走预解算的经纬度数组（landLL），不做逐点三角函数；
+    2. 无深度衰减与临边剔除——平面图所有点满亮，亮度只叠加尺寸抖动；
+    3. 尺寸不按深度收缩，密度即信息量；抖动只保留少量，打散经纬网格感。
+  */
+  _paintLandFlat() {
+    const { ctx, landLL, mapX, mapY, mapW, mapH, _landSize, _landJx, _landJy } = this;
+    if (!landLL) return;
+
+    // 点宽 = 每度像素 × 采样间距 × 风格系数，相邻点近相接。
+    const base = Math.max(1, mapW / 360 * DEFAULT_LAND_STEP_DEG * this._style.dotScale);
+    const jf = 0.35 * base;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(mapX, mapY, mapW, mapH);
+    ctx.clip();
+    ctx.fillStyle = PALETTE.landFill;
+    ctx.globalAlpha = this._style.dotAlpha;
+
+    for (let i = 0, n = landLL.length; i < n; i += 2) {
+      const p = this.projector(landLL[i], landLL[i + 1]);
+      const idx = i >> 1;
+      const s = base * (_landSize[idx] || 1);
+      const x = p.x + _landJx[idx] * jf;
+      const y = p.y + _landJy[idx] * jf;
+      ctx.fillRect(x - s * 0.5, y - s * 0.5, s, s);
+    }
+
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  /*
   _paintLight 方向性光照。
 
   关键：光源是一个方向，不是一个点。
@@ -686,11 +823,13 @@ export class GlobeRenderer {
   这才是一个发光体在暗背景上真实的成像方式。
   */
   _paintTrails(now) {
-    const { ctx, cx, cy, r } = this;
+    const { ctx, cx, cy, r, mapX, mapY, mapW, mapH } = this;
     const PI2 = Math.PI * 2;
     ctx.save();
     ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, PI2);
+    // 球体裁圆、平面裁矩形；弹道绝不能越出地图边界。
+    if (this._style.flat) ctx.rect(mapX, mapY, mapW, mapH);
+    else ctx.arc(cx, cy, r, 0, PI2);
     ctx.clip();
     // save/restore 会一并还原该状态，不需要在末尾手动复位。
     ctx.globalCompositeOperation = 'lighter';
@@ -923,13 +1062,18 @@ export class GlobeRenderer {
   }
 
   // 把 [from, to] 的分数区间写入当前路径；遇背面点断笔。
+  // 平面模式下相邻点横向跳变超过半图宽（跨日界线）同样断笔，
+  // 否则一条弹道会拉成横穿整张地图的水平线。
   _tracePathF(pts, from, to) {
     const { ctx } = this;
     let pen = false;
+    let lastX = 0;
     const push = (p) => {
       if (!p) { pen = false; return; }
+      if (pen && Math.abs(p.x - lastX) > this._jumpX) pen = false;
       if (!pen) { ctx.moveTo(p.x, p.y); pen = true; }
       else ctx.lineTo(p.x, p.y);
+      lastX = p.x;
     };
     push(this._lerpPt(pts, from));
     const last = Math.min(pts.length - 1, Math.floor(to));
@@ -1043,8 +1187,9 @@ export class GlobeRenderer {
     const p = Math.min(1, Math.max(0, t));
     // 靠近地平线的环会有一部分切出球面、飘在太空里——那是贴纸感的来源。
     // 按到球心的归一化距离压暗，波前自然收在地平线之内。
+    // 平面模式没有地平线，恒为满亮。
     const nd = r > 0 ? Math.hypot(x - cx, y - cy) / r : 0;
-    const limb = Math.min(1, Math.max(0, (1.02 - nd) / 0.24));
+    const limb = this._style.flat ? 1 : Math.min(1, Math.max(0, (1.02 - nd) / 0.24));
     if (limb <= 0.01) return;
     // 半径走缓出、透明度走二次衰减：匀速扩张的圆环读起来像示意图，
     // 缓出的波前才有"推出去然后散掉"的物理感。
