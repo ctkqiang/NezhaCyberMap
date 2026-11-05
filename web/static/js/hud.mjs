@@ -90,14 +90,14 @@ function sparkSVG(values, rate) {
 
   return '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
     '<defs><linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">' +
-      '<stop offset="0" stop-color="#ff2e4d" stop-opacity="0.3"/>' +
-      '<stop offset="1" stop-color="#ff2e4d" stop-opacity="0"/>' +
+      '<stop offset="0" stop-color="#5ab0ff" stop-opacity="0.3"/>' +
+      '<stop offset="1" stop-color="#5ab0ff" stop-opacity="0"/>' +
     '</linearGradient></defs>' +
     '<path d="M0 ' + (H - PAD_Y) + ' H' + W + '" stroke="rgba(255,255,255,0.05)" stroke-width="1" fill="none"/>' +
     '<path d="' + area + '" fill="url(#sparkFill)"/>' +
-    '<path d="' + line + '" fill="none" stroke="#ff7387" stroke-width="1.4" ' +
+    '<path d="' + line + '" fill="none" stroke="#7cc2ff" stroke-width="1.4" ' +
       'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>' +
-    '<circle cx="' + last.x.toFixed(2) + '" cy="' + last.y.toFixed(2) + '" r="1.6" fill="#ff2e4d"/>' +
+    '<circle cx="' + last.x.toFixed(2) + '" cy="' + last.y.toFixed(2) + '" r="1.6" fill="#5ab0ff"/>' +
   '</svg>' +
   '<div class="spark-foot"><span>峰值</span><b>' + max + '</b><em>事件/秒</em>' +
     '<span class="spark-peak">当前 ' + rate + ' 事件/分</span></div>';

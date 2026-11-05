@@ -1,5 +1,5 @@
 /*
-赛博威胁地图 · 深空指挥台（Deep-Space Deck）
+哪吒网络安全 · 深空指挥台（Deep-Space Deck）
 
 设计三条硬规则，所有选择都由它们推导而来：
   1. 一切贴边。界面是驾驶舱仪表，不是浮空圆角卡片墙。
@@ -46,13 +46,12 @@
   --glass: linear-gradient(180deg, rgba(9, 8, 12, 0.9), rgba(5, 5, 7, 0.94));
 
   /* 严重度四档（必须与 util.mjs 的 SEV.colors 同源） */
-  --sev-0: #b05563;
-  --sev-1: #ff5a66;
-  --sev-2: #ff1f3d;
-  --sev-3: #ff0033;
+  --sev-0: #5ab0ff;
+  --sev-1: #3dd68c;
+  --sev-2: #ffaa33;
+  --sev-3: #ff2242;
 
-  /* 数据源健康度：绿 / 琥珀是唯一允许的非红色，
-     因为它们表达"健康"与"降级"，必须与红色攻击语义区分 */
+  /* 数据源健康度：绿 / 琥珀表达"健康"与"降级"，与攻击严重度语义区分 */
   --ok: #4ee0a2;
   --warn: #ffbe6b;
   --bad: #ff2e4d;
@@ -716,7 +715,7 @@ noscript {
 .sw.sev-0 { background: var(--sev-0); }
 .sw.sev-1 { background: var(--sev-1); }
 .sw.sev-2 { background: var(--sev-2); }
-.sw.sev-3 { background: var(--sev-3); box-shadow: 0 0 6px rgba(255, 0, 51, 0.6); }
+.sw.sev-3 { background: var(--sev-3); box-shadow: 0 0 6px rgba(255, 34, 66, 0.6); }
 
 .pt {
   width: 6px;
