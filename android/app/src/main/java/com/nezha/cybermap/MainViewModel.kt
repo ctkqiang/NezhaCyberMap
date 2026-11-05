@@ -32,16 +32,47 @@ class MainViewModel : ViewModel() {
     val log: StateFlow<List<AttackEvent>> = _log
 
     private var ws: RealtimeClient? = null
+    private var demo: DemoFeed? = null
+
+    private val _demoMode = MutableStateFlow(false)
+    val demoMode: StateFlow<Boolean> = _demoMode
+
+    private val _serverUrl = MutableStateFlow("")
+    val serverUrl: StateFlow<String> = _serverUrl
 
     fun attach(renderer: GlobeRenderer) {
         this.renderer = renderer
     }
 
     fun connect(url: String) {
+        stopDemo()
+        _serverUrl.value = url
         ws?.close()
         ws = RealtimeClient(url, viewModelScope, ::onMsg) { on ->
             _connected.value = on
         }.also { it.connect() }
+    }
+
+    /** 演示模式：本地伪随机事件源，不需要任何后端。 */
+    fun startDemo() {
+        ws?.close()
+        ws = null
+        _connected.value = false
+        _demoMode.value = true
+        _stats.value = StatsSnapshot.EMPTY
+        _feeds.value = mapOf("demo" to FeedItem(1, "演示", "本地生成", 0L))
+        demo = DemoFeed(viewModelScope) { ev ->
+            val now = android.os.SystemClock.uptimeMillis()
+            renderer?.addEvent(ev, now)
+            _log.value = (listOf(ev) + _log.value).take(FEED_KEEP)
+            _stats.value = _stats.value.copy(total = _stats.value.total + 1)
+        }.also { it.start() }
+    }
+
+    fun stopDemo() {
+        demo?.stop()
+        demo = null
+        _demoMode.value = false
     }
 
     fun togglePause() {
@@ -52,6 +83,7 @@ class MainViewModel : ViewModel() {
 
     override fun onCleared() {
         ws?.close()
+        demo?.stop()
     }
 
     private fun onMsg(msg: ServerMsg) {

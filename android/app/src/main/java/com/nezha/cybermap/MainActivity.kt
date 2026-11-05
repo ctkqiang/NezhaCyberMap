@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -24,9 +25,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -35,6 +40,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
@@ -47,6 +53,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /** 默认连模拟器的宿主机回环；真机调试时改成局域网 IP。 */
 private const val SERVER_URL = "ws://10.0.2.2:8148/ws"
@@ -62,6 +70,9 @@ private val DarkScheme = darkColorScheme(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 边到边：地球画布铺满整屏（含状态栏/导航栏区域），
+        // 系统栏透明化，内容由各 HUD 组件自行用 safeDrawingPadding 避开。
+        enableEdgeToEdge()
         setContent {
             MaterialTheme(colorScheme = DarkScheme) {
                 ThreatMapScreen(SERVER_URL)
@@ -75,7 +86,9 @@ fun ThreatMapScreen(serverUrl: String, vm: MainViewModel = viewModel()) {
     val stats by vm.stats.collectAsState()
     val feeds by vm.feeds.collectAsState()
     val connected by vm.connected.collectAsState()
+    val demoMode by vm.demoMode.collectAsState()
     val log by vm.log.collectAsState()
+    var showServerDialog by remember { mutableStateOf(false) }
 
     // 陆地点阵只构建一次；尺寸变化时只重建相机参数。
     val context = LocalContext.current
@@ -85,7 +98,12 @@ fun ThreatMapScreen(serverUrl: String, vm: MainViewModel = viewModel()) {
     var frameTick by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(Unit) {
+        // 先尝试真实后端；3 秒内连不上自动降级到演示模式，不让用户面对黑屏。
         vm.connect(serverUrl)
+        launch {
+            delay(3000)
+            if (!vm.connected.value && !vm.demoMode.value) vm.startDemo()
+        }
         while (true) {
             withFrameMillis { frameTick = it }
         }
@@ -113,16 +131,67 @@ fun ThreatMapScreen(serverUrl: String, vm: MainViewModel = viewModel()) {
             with(renderer) { frame(SystemClock.uptimeMillis()) }
         }
 
-        TopBar(stats, connected, onPause = vm::togglePause)
-        EventLog(log, Modifier.align(Alignment.BottomStart))
-        FeedStatus(feeds, Modifier.align(Alignment.BottomEnd))
+        // 顶栏避开状态栏与挖孔，底部组件避开手势导航条。
+        TopBar(
+            stats = stats,
+            connected = connected,
+            demoMode = demoMode,
+            onPause = vm::togglePause,
+            onDemoToggle = { if (vm.demoMode.value) vm.connect(serverUrl) else vm.startDemo() },
+            onServerClick = { showServerDialog = true },
+            modifier = Modifier.statusBarsPadding(),
+        )
+        EventLog(log, Modifier.align(Alignment.BottomStart).navigationBarsPadding())
+        FeedStatus(feeds, Modifier.align(Alignment.BottomEnd).navigationBarsPadding())
+
+        if (showServerDialog) {
+            ServerDialog(
+                current = vm.serverUrl.collectAsState().value.ifBlank { serverUrl },
+                onDismiss = { showServerDialog = false },
+                onConfirm = { url ->
+                    showServerDialog = false
+                    vm.connect(url)
+                },
+            )
+        }
     }
 }
 
 @Composable
-private fun TopBar(stats: StatsSnapshot, connected: Boolean, onPause: () -> Unit) {
+private fun ServerDialog(current: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var text by remember { mutableStateOf(current) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("服务器地址", fontFamily = FontFamily.Monospace) },
+        text = {
+            Column {
+                Text("真实数据需要 Go 后端（cybermap serve）。演示模式不需要服务器。", fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    label = { Text("ws://主机:端口/ws") },
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(text.trim()) }) { Text("连接") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun TopBar(
+    stats: StatsSnapshot,
+    connected: Boolean,
+    demoMode: Boolean,
+    onPause: () -> Unit,
+    onDemoToggle: () -> Unit,
+    onServerClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+        modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("哪吒威胁地图", color = Palette.headGlow, fontSize = 15.sp, fontFamily = FontFamily.Monospace)
@@ -133,13 +202,17 @@ private fun TopBar(stats: StatsSnapshot, connected: Boolean, onPause: () -> Unit
         Spacer(Modifier.width(14.dp))
         StatItem("运行", formatUptime(stats.uptimeSec))
         Spacer(Modifier.weight(1f))
-        Text(
-            if (connected) "● 已连接" else "○ 未连接",
-            color = if (connected) Color(0xFF3DD68C) else Color(0xFFFF4A60),
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.width(10.dp))
+        TextButton(onClick = onServerClick) {
+            Text(
+                if (demoMode) "◐ 演示模式" else if (connected) "● 已连接" else "○ 未连接",
+                color = if (connected) Color(0xFF3DD68C) else if (demoMode) Color(0xFFFFB3C0) else Color(0xFFFF4A60),
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+        TextButton(onClick = onDemoToggle) {
+            Text(if (demoMode) "连真实源" else "演示", color = Palette.target, fontSize = 12.sp)
+        }
         TextButton(onClick = onPause) {
             Text(if (stats.paused) "继续" else "暂停", color = Palette.target, fontSize = 12.sp)
         }
