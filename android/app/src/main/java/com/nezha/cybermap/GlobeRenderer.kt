@@ -23,6 +23,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import kotlin.math.PI
 import kotlin.math.acos
+import kotlin.math.asin
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -112,6 +114,23 @@ class GlobeRenderer(private val land: FloatArray) {
     private var cy = 0f
     private var radius = 0f
 
+    // ── 平面地图模式（类卡巴斯基平铺视图）──
+    var flatMode = false
+        private set
+    private var panLon = 0.0        // 视图中心经度偏移（度）
+    private var mapX = 0f
+    private var mapY = 0f
+    private var mapW = 0f
+    private var mapH = 0f
+    // 弹道描边的横向跳变阈值：球体模式正无穷（永不触发），平面模式为半图宽。
+    private var jumpX = Float.POSITIVE_INFINITY
+
+    /** 切换球体/平面视图；返回切换后的模式。 */
+    fun toggleFlat(): Boolean {
+        flatMode = !flatMode
+        return flatMode
+    }
+
     private val events = ArrayDeque<AttackEvent>()
     private val arcCache = HashMap<AttackEvent, ArcGeo>()
 
@@ -121,10 +140,30 @@ class GlobeRenderer(private val land: FloatArray) {
     private val landJx = FloatArray(dotCount) { Random.nextFloat() * 2f - 1f }
     private val landJy = FloatArray(dotCount) { Random.nextFloat() * 2f - 1f }
 
+    // 平面模式用的经纬度点阵：从单位向量反解一次并缓存，
+    // 避免每帧对上万点做 asin/atan2。
+    private val landLL = FloatArray(dotCount * 2)
+
+    init {
+        val deg = (PI / 180.0).toFloat()
+        var i = 0
+        while (i < dotCount) {
+            landLL[i * 2] = (asin(land[i * 3 + 2].coerceIn(-1f, 1f))) / deg
+            landLL[i * 2 + 1] = (atan2(land[i * 3 + 1], land[i * 3])) / deg
+            i++
+        }
+    }
+
     fun resize(w: Float, h: Float) {
         cx = w / 2f
         cy = h * 0.46f
         radius = min(w * 0.46f, h * 0.38f)
+        // 平面地图矩形：宽受视口宽约束，高受视口约束，保持 2:1。
+        val fw = min(w * 0.96f, h * 1.44f)
+        mapW = fw
+        mapH = fw / 2f
+        mapX = (w - fw) / 2f
+        mapY = (h - mapH) * 0.46f
     }
 
     // ── 事件 ──
@@ -154,6 +193,13 @@ class GlobeRenderer(private val land: FloatArray) {
     fun dragBy(dx: Float, dy: Float, nowMs: Long) {
         val gap = max(1L, nowMs - lastMoveAt)
         lastMoveAt = nowMs
+        if (flatMode) {
+            // 平面模式：横拖平移经度（右拖 → 地表右移），回绕到 [-180, 180)；
+            // 纵向拖拽与甩动惯性在平铺图上无意义，直接忽略。
+            panLon = ((panLon - dx * 360.0 / mapW) % 360.0 + 540.0) % 360.0 - 180.0
+            lastDragAt = nowMs
+            return
+        }
         yaw -= dx * 0.005
         pitch = max(-PITCH_LIMIT, min(PITCH_LIMIT, pitch - dy * 0.005))
         lastDragAt = nowMs
@@ -177,17 +223,30 @@ class GlobeRenderer(private val land: FloatArray) {
         lastFrameAt = nowMs
         stepCamera(dt.toDouble(), nowMs)
 
-        val proj = Projector(cx, cy, radius, yaw, pitch)
         paintSky()
-        paintSphere()
-        paintGraticule(proj)
-        paintLand(proj)
-        paintLight()
-        paintTrails(proj, nowMs)
-        paintSeeds(proj, nowMs)
+        if (flatMode) {
+            val proj = FlatProjector(mapX, mapY, mapW, mapH, panLon)
+            jumpX = mapW / 2f
+            paintMapBg()
+            paintGraticuleFlat(proj)
+            paintLandFlat(proj)
+            paintTrails(proj, nowMs)
+            paintSeeds(proj, nowMs)
+        } else {
+            val proj = Projector(cx, cy, radius, yaw, pitch)
+            jumpX = Float.POSITIVE_INFINITY
+            paintSphere()
+            paintGraticule(proj)
+            paintLand(proj)
+            paintLight()
+            paintTrails(proj, nowMs)
+            paintSeeds(proj, nowMs)
+        }
     }
 
     private fun stepCamera(dt: Double, nowMs: Long) {
+        // 平面模式没有自转与惯性：地图是铺开的仪表板，静止才是正确的"性格"。
+        if (flatMode) return
         if (flingVel != 0.0) {
             yaw -= flingVel * dt
             flingVel *= 0.5.pow(dt / FLING_HALF_MS)
@@ -204,6 +263,64 @@ class GlobeRenderer(private val land: FloatArray) {
         drawRect(Brush.radialGradient(listOf(Palette.skyCore, Palette.skyEdge), center = Offset(cx, cy), radius = max(size.width, size.height)))
     }
 
+    // ── 平面模式绘制 ──
+
+    /** 平面地图底板：比天空略亮，顶部一层极淡受光、底部收暗，外描一道细边。 */
+    private fun DrawScope.paintMapBg() {
+        val rect = androidx.compose.ui.geometry.Rect(mapX, mapY, mapX + mapW, mapY + mapH)
+        drawRect(Palette.globe1, topLeft = Offset(mapX, mapY), size = androidx.compose.ui.geometry.Size(mapW, mapH))
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to Color(0x0DFF8484), 0.5f to Color.Transparent, 1f to Color(0x38000000),
+                startY = mapY, endY = mapY + mapH,
+            ),
+            topLeft = Offset(mapX, mapY),
+            size = androidx.compose.ui.geometry.Size(mapW, mapH),
+        )
+        drawRect(Color(0x29EB6C7E), topLeft = Offset(mapX, mapY), size = androidx.compose.ui.geometry.Size(mapW, mapH), style = Stroke(1f))
+    }
+
+    /** 平面经纬网：经纬各 30° 的直线网格。 */
+    private fun DrawScope.paintGraticuleFlat(proj: IProjector) {
+        clipPath(Path().apply { addRect(androidx.compose.ui.geometry.Rect(mapX, mapY, mapX + mapW, mapY + mapH)) }) {
+            for (lon in -150..150 step 30) {
+                val x = proj.project(0.0, lon.toDouble())!!.x
+                drawLine(Palette.grid, Offset(x, mapY), Offset(x, mapY + mapH), strokeWidth = 1f)
+            }
+            for (lat in -60..60 step 30) {
+                val y = proj.project(lat.toDouble(), 0.0)!!.y
+                drawLine(Palette.grid, Offset(mapX, y), Offset(mapX + mapW, y), strokeWidth = 1f)
+            }
+        }
+    }
+
+    /**
+     * 平面陆地点阵：走预解算的经纬度数组，无深度衰减与临边剔除，
+     * 所有点满亮满尺寸；只保留少量抖动打散经纬网格感。
+     */
+    private fun DrawScope.paintLandFlat(proj: IProjector) {
+        if (landLL.isEmpty()) return
+        val base = max(1f, mapW / 360f * LAND_STEP_DEG.toFloat() * 0.9f)
+        val jf = 0.35f * base
+        clipPath(Path().apply { addRect(androidx.compose.ui.geometry.Rect(mapX, mapY, mapX + mapW, mapY + mapH)) }) {
+            var idx = 0
+            var i = 0
+            while (i < landLL.size) {
+                val p = proj.project(landLL[i].toDouble(), landLL[i + 1].toDouble())!!
+                val s = base * landSize[idx]
+                val x = p.x + landJx[idx] * jf
+                val y = p.y + landJy[idx] * jf
+                drawRect(
+                    color = Palette.land.copy(alpha = 0.95f),
+                    topLeft = Offset(x - s * 0.5f, y - s * 0.5f),
+                    size = androidx.compose.ui.geometry.Size(s, s),
+                )
+                i += 2
+                idx++
+            }
+        }
+    }
+
     private fun DrawScope.paintSphere() {
         drawCircle(
             brush = Brush.radialGradient(
@@ -216,7 +333,7 @@ class GlobeRenderer(private val land: FloatArray) {
         )
     }
 
-    private fun DrawScope.paintGraticule(proj: Projector) {
+    private fun DrawScope.paintGraticule(proj: IProjector) {
         clipPath(Path().apply { addOval(androidx.compose.ui.geometry.Rect(Offset(cx - radius, cy - radius), radius * 2f)) }) {
             for (lon in -180 until 180 step 30) {
                 strokeCurve(proj, -90.0, 90.0, 5.0) { lat -> proj.project(lat, lon.toDouble()) }
@@ -228,7 +345,7 @@ class GlobeRenderer(private val land: FloatArray) {
     }
 
     private inline fun DrawScope.strokeCurve(
-        proj: Projector, from: Double, to: Double, step: Double,
+        proj: IProjector, from: Double, to: Double, step: Double,
         crossinline sample: (Double) -> Proj?,
     ) {
         val path = Path()
@@ -248,7 +365,7 @@ class GlobeRenderer(private val land: FloatArray) {
         drawPath(path, Palette.grid, style = Stroke(width = 1f))
     }
 
-    private fun DrawScope.paintLand(proj: Projector) {
+    private fun DrawScope.paintLand(proj: IProjector) {
         if (land.isEmpty()) return
         val base = max(1f, radius * (LAND_STEP_DEG * PI / 180).toFloat() * 0.78f)
         val span = 1.0 - LAND_MIN_DEPTH
@@ -302,7 +419,7 @@ class GlobeRenderer(private val land: FloatArray) {
 
     // ── 弹道 ──
 
-    private fun arcGeo(proj: Projector, ev: AttackEvent): ArcGeo? {
+    private fun arcGeo(proj: IProjector, ev: AttackEvent): ArcGeo? {
         arcCache[ev]?.let { return it }
         val a = toVec(ev.src.lat, ev.src.lon)
         val b = toVec(ev.dst.lat, ev.dst.lon)
@@ -346,7 +463,7 @@ class GlobeRenderer(private val land: FloatArray) {
         )
     }
 
-    private fun DrawScope.paintTrails(proj: Projector, nowMs: Long) {
+    private fun DrawScope.paintTrails(proj: IProjector, nowMs: Long) {
         // 同一起终国家对只留最新一条，避免高重复源刷屏。
         val seen = HashSet<String>()
         val active = ArrayList<AttackEvent>()
@@ -358,7 +475,12 @@ class GlobeRenderer(private val land: FloatArray) {
             }
         }
 
-        clipPath(Path().apply { addOval(androidx.compose.ui.geometry.Rect(Offset(cx - radius, cy - radius), radius * 2f)) }) {
+        // 球体裁圆、平面裁矩形；弹道绝不能越出地图边界。
+        val clipP = Path().apply {
+            if (flatMode) addRect(androidx.compose.ui.geometry.Rect(mapX, mapY, mapX + mapW, mapY + mapH))
+            else addOval(androidx.compose.ui.geometry.Rect(Offset(cx - radius, cy - radius), radius * 2f))
+        }
+        clipPath(clipP) {
             for (ev in active) {
                 val age = (nowMs - ev.bornAtMs).toDouble()
                 if (age < 0) continue
@@ -453,13 +575,18 @@ class GlobeRenderer(private val land: FloatArray) {
         )
     }
 
-    /** 沿分数下标把 [from, to] 区间描成路径；背面（null）处断笔。 */
+    /** 把 [from, to] 分数区间写入路径；遇背面点断笔。
+     * 平面模式下相邻点横向跳变超过半图宽（跨日界线）同样断笔，
+     * 否则一条弹道会拉成横穿整张地图的水平线。 */
     private fun tracePath(pts: List<Proj?>, from: Double, to: Double): Path {
         val path = Path()
         var pen = false
+        var lastX = 0f
         fun push(p: Proj?) {
             if (p == null) { pen = false; return }
+            if (pen && kotlin.math.abs(p.x - lastX) > jumpX) pen = false
             if (!pen) { path.moveTo(p.x, p.y); pen = true } else path.lineTo(p.x, p.y)
+            lastX = p.x
         }
         push(lerpPt(pts, from))
         val last = min(pts.size - 1.0, kotlin.math.floor(to)).toInt()
@@ -474,7 +601,7 @@ class GlobeRenderer(private val land: FloatArray) {
 
     // ── 标记 ──
 
-    private fun DrawScope.paintSeeds(proj: Projector, nowMs: Long) {
+    private fun DrawScope.paintSeeds(proj: IProjector, nowMs: Long) {
         val recent = events.takeLast(SEED_MAX)
         val newestFrom = recent.size - SEED_TARGET_MAX
         for ((i, ev) in recent.withIndex()) {
@@ -501,7 +628,8 @@ class GlobeRenderer(private val land: FloatArray) {
     private fun DrawScope.ripple(x: Float, y: Float, p: Float, color: Color, spread: Float) {
         if (p >= 1f) return
         val nd = if (radius > 0) kotlin.math.hypot(x - cx, y - cy) / radius else 0f
-        val limb = min(1f, max(0f, (1.02f - nd) / 0.24f))
+        // 平面模式没有地平线，恒为满亮。
+        val limb = if (flatMode) 1f else min(1f, max(0f, (1.02f - nd) / 0.24f))
         if (limb <= 0.01f) return
         val r = 1.5f + easeOutCubic(p.toDouble()).toFloat() * spread
         val rise = smoothstep(min(1f, p / 0.18f).toDouble()).toFloat()

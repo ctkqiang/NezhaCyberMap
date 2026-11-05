@@ -89,6 +89,7 @@ fun ThreatMapScreen(serverUrl: String, vm: MainViewModel = viewModel()) {
     val demoMode by vm.demoMode.collectAsState()
     val log by vm.log.collectAsState()
     var showServerDialog by remember { mutableStateOf(false) }
+    var flatMode by remember { mutableStateOf(false) }
 
     // 陆地点阵只构建一次；尺寸变化时只重建相机参数。
     val context = LocalContext.current
@@ -136,9 +137,11 @@ fun ThreatMapScreen(serverUrl: String, vm: MainViewModel = viewModel()) {
             stats = stats,
             connected = connected,
             demoMode = demoMode,
+            flatMode = flatMode,
             onPause = vm::togglePause,
             onDemoToggle = { if (vm.demoMode.value) vm.connect(serverUrl) else vm.startDemo() },
             onServerClick = { showServerDialog = true },
+            onProjToggle = { flatMode = renderer.toggleFlat() },
             modifier = Modifier.statusBarsPadding(),
         )
         EventLog(log, Modifier.align(Alignment.BottomStart).navigationBarsPadding())
@@ -185,9 +188,11 @@ private fun TopBar(
     stats: StatsSnapshot,
     connected: Boolean,
     demoMode: Boolean,
+    flatMode: Boolean,
     onPause: () -> Unit,
     onDemoToggle: () -> Unit,
     onServerClick: () -> Unit,
+    onProjToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -212,6 +217,10 @@ private fun TopBar(
         }
         TextButton(onClick = onDemoToggle) {
             Text(if (demoMode) "连真实源" else "演示", color = Palette.target, fontSize = 12.sp)
+        }
+        TextButton(onClick = onProjToggle) {
+            // 按钮文案展示"点击后要去哪"，而不是当前所在视图。
+            Text(if (flatMode) "球体" else "平面", color = Palette.target, fontSize = 12.sp)
         }
         TextButton(onClick = onPause) {
             Text(if (stats.paused) "继续" else "暂停", color = Palette.target, fontSize = 12.sp)
