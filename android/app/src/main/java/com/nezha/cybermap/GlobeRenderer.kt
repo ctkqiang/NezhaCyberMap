@@ -64,7 +64,7 @@ private const val RIPPLE_MS = 2400L
 private const val REPLAY_STEP_MS = 150L
 private const val MAX_EVENTS = 64
 
-// ── 调色板（红黑主题，与 Web 端 PALETTE 对齐；球体为实心体）──
+// ── 调色板（球体为实心体；严重度四色：蓝/绿/橙/红，与 Web 端 SEV.colors 对齐）──
 object Palette {
     val skyCore = Color(0xFF120D14)
     val skyEdge = Color(0xFF050507)
@@ -78,9 +78,9 @@ object Palette {
     val headCore = Color(0xFFFFF8FA)
     val headGlow = Color(0xFFFFEEF2)
     val sev = listOf(
-        Color(0xFFFFB3C0), // 低
-        Color(0xFFFF7A90), // 中
-        Color(0xFFFF4A60), // 高
+        Color(0xFF5AB0FF), // 低
+        Color(0xFF3DD68C), // 中
+        Color(0xFFFFAA33), // 高
         Color(0xFFFF2242), // 严重
     )
 }

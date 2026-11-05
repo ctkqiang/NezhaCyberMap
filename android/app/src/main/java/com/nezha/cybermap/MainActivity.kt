@@ -194,7 +194,7 @@ private fun TopBar(
         modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("哪吒威胁地图", color = Palette.headGlow, fontSize = 15.sp, fontFamily = FontFamily.Monospace)
+        Text("哪吒网络安全", color = Palette.headGlow, fontSize = 15.sp, fontFamily = FontFamily.Monospace)
         Spacer(Modifier.width(18.dp))
         StatItem("事件总量", "${stats.total}")
         Spacer(Modifier.width(14.dp))
@@ -237,7 +237,7 @@ private fun formatUptime(sec: Long): String {
 @Composable
 private fun EventLog(log: List<AttackEvent>, modifier: Modifier) {
     Column(modifier.padding(12.dp).width(300.dp)) {
-        Text("实时事件流 · LIVE", color = Palette.target, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+        Text("实时事件流", color = Palette.target, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
         Spacer(Modifier.height(6.dp))
         for (ev in log) {
             Text(
