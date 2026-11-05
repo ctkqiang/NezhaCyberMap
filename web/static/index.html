@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>赛博威胁地图</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<canvas id="map" aria-label="全球攻击态势地球"></canvas>
+<div id="vignette" aria-hidden="true"></div>
+
+<header id="topbar">
+  <div class="brand">
+    <i class="brand-mark" aria-hidden="true"></i>
+    <div class="brand-text">
+      <h1 class="brand-name">赛博威胁地图</h1>
+      <p class="brand-sub">NEZHA CYBER MAP</p>
+    </div>
+  </div>
+
+  <div class="rail" role="group" aria-label="全局指标">
+    <div class="cell"><span class="k">事件总量</span><b id="stat-total">0</b></div>
+    <div class="cell"><span class="k">速率 / 分</span><b id="stat-rate">0</b></div>
+    <div class="cell"><span class="k">运行时长</span><b id="stat-uptime">00:00</b></div>
+  </div>
+
+  <div class="tb-spacer"></div>
+
+  <div id="conn-status" class="conn" role="status">
+    <i class="dot" aria-hidden="true"></i><span class="lbl">连接中</span>
+  </div>
+
+  <div class="tools">
+    <button id="btn-style" class="tbtn" type="button">
+      <span class="ico" aria-hidden="true">◐</span><span class="lbl">标准</span>
+    </button>
+    <button id="btn-pause" class="tbtn" type="button">
+      <span class="ico" aria-hidden="true">⏸</span><span class="lbl">暂停</span>
+    </button>
+    <button id="btn-panel" class="tbtn narrow-only" type="button" aria-controls="panel" aria-expanded="false">
+      <span class="ico" aria-hidden="true">▤</span>
+    </button>
+  </div>
+</header>
+
+<aside id="panel" aria-label="威胁数据面板">
+  <section class="psec">
+    <h2>攻击源国家 <em id="country-meta">TOP 10</em></h2>
+    <ol id="country-list" class="countries"></ol>
+  </section>
+
+  <section class="psec">
+    <h2>严重度分布 <em>实时</em></h2>
+    <div class="donut-wrap">
+      <div id="sev-donut" class="donut" aria-hidden="true"></div>
+      <div class="donut-center"><b id="sev-total">0</b><span>总计</span></div>
+    </div>
+    <ul id="sev-list" class="sev-list"></ul>
+  </section>
+
+  <section class="psec">
+    <h2>事件速率 <em>最近 30 秒</em></h2>
+    <div id="spark" class="spark"></div>
+  </section>
+
+  <section class="psec">
+    <h2>数据源 <em id="feed-count">0 / 0</em></h2>
+    <ul id="feed-list" class="feeds"></ul>
+  </section>
+</aside>
+
+<div id="stream" aria-label="实时事件流">
+  <div class="stream-head"><span class="sh-t">实时事件流</span><span class="sh-live">LIVE</span></div>
+  <ol id="ticker"></ol>
+</div>
+
+<div id="legend" aria-hidden="true">
+  <span><i class="sw sev-0"></i>低</span>
+  <span><i class="sw sev-1"></i>中</span>
+  <span><i class="sw sev-2"></i>高</span>
+  <span><i class="sw sev-3"></i>严重</span>
+  <span class="sep"></span>
+  <span><i class="pt src"></i>攻击源</span>
+  <span><i class="pt dst"></i>目标</span>
+  <span class="sep"></span>
+  <span class="hint">拖拽旋转 · Space 暂停</span>
+</div>
+
+<noscript>需要启用 JavaScript 才能显示实时威胁地图。</noscript>
+
+<script src="/static/world-data.js"></script>
+<script type="module" src="/static/js/main.mjs"></script>
+</body>
+</html>
