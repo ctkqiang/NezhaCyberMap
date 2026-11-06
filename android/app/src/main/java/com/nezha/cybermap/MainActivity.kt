@@ -141,11 +141,19 @@ fun ThreatMapScreen(serverUrl: String, vm: MainViewModel = viewModel()) {
 
     LaunchedEffect(Unit) {
         // 先尝试真实后端；3 秒内连不上自动降级到演示模式，不让用户面对黑屏。
-        vm.connect(serverUrl)
+        // 连接异常（地址非法、OkHttp 已关闭等）绝不能让演示降级跟着失效。
+        runCatching { vm.connect(serverUrl) }
         launch {
             delay(3000)
             if (!vm.connected.value && !vm.demoMode.value) vm.startDemo()
         }
+    }
+
+    // 帧驱动独立成一个 effect：它必须无条件活着。
+    // 之前和网络连接写在同一个作用域里，connect() 只要抛一次异常，
+    // 同作用域的 while 循环就会被连带取消 —— 地球永远停在第一帧，像死机一样。
+    // 动画是渲染器自己的事，不该被网络成败绑架。
+    LaunchedEffect(Unit) {
         while (true) {
             withFrameMillis { frameTick = it }
         }

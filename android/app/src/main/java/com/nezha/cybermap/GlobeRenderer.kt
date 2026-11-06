@@ -45,6 +45,10 @@ private const val FLING_HALF_MS = 900.0
 private const val FLING_MAX = 0.018
 private const val PITCH_LIMIT = 1.1
 
+// "从未拖拽"的哨兵值。必须单独判断，不能直接参与 nowMs - lastDragAt：
+// nowMs 减去 Long.MIN_VALUE 会溢出成负数，空闲时间恒为负，自转权重就被永久压成 0。
+private const val NEVER_DRAGGED = Long.MIN_VALUE
+
 // ── 弧线（彗星弹道）──
 private const val ARC_STEPS = 30
 private const val ARC_TAIL = 13.0
@@ -107,11 +111,12 @@ private data class ArcGeo(val pts: List<Proj?>, val flightMs: Double)
  */
 class GlobeRenderer(private val land: FloatArray) {
 
-    private var yaw = -1.2
+    // yaw 对同模块单元测试可见：地球是否真的在自转，只能靠断言 yaw 变化来证明。
+    internal var yaw = -1.2
     private var pitch = PITCH_BASE
     private var flingVel = 0.0
     private var spinWeight = 1.0
-    private var lastDragAt = Long.MIN_VALUE
+    private var lastDragAt = NEVER_DRAGGED
     private var lastFrameAt = 0L
     private var lastMoveAt = 0L
 
@@ -246,7 +251,11 @@ class GlobeRenderer(private val land: FloatArray) {
         if (flatMode) {
             // 平面模式：横拖平移经度（右拖 → 地表右移），回绕到 [-180, 180)；
             // 纵向拖拽与甩动惯性在平铺图上无意义，直接忽略。
-            panLon = ((panLon - dx * 360.0 / mapW) % 360.0 + 540.0) % 360.0 - 180.0
+            // mapW 为 0（首帧 resize 之前的极端时序）时除法产出 ±∞，
+            // ±∞ % 360 = NaN，而 NaN 会永远污染 panLon、冻结整个平面渲染管线。
+            if (mapW > 0f) {
+                panLon = ((panLon - dx * 360.0 / mapW) % 360.0 + 540.0) % 360.0 - 180.0
+            }
             lastDragAt = nowMs
             return
         }
@@ -269,9 +278,7 @@ class GlobeRenderer(private val land: FloatArray) {
     /** 绘制一帧；nowMs 使用 SystemClock.uptimeMillis() 时基。 */
     fun DrawScope.frame(nowMs: Long) {
         if (radius <= 0f) return
-        val dt = if (lastFrameAt == 0L) 16L else (nowMs - lastFrameAt).coerceIn(1L, 50L)
-        lastFrameAt = nowMs
-        stepCamera(dt.toDouble(), nowMs)
+        advance(nowMs)
         // 投影每帧都在变（自转、拖拽、平移），弧线采样点必须跟着重算。
         // 漏了这一步，弹道会冻在首次投影的位置：地球转走了，轨迹还留在原地。
         arcCache.clear()
@@ -304,6 +311,18 @@ class GlobeRenderer(private val land: FloatArray) {
         }
     }
 
+    /**
+     * 推进相机一帧（不含绘制）。
+     *
+     * 与 frame() 拆开是为了能在 JVM 单元测试里直接断言"地球到底转不转"：
+     * 上一版自转被一个 Long 溢出永久关掉，纯读代码没看出来，只有断言 yaw 变化才抓得到。
+     */
+    internal fun advance(nowMs: Long) {
+        val dt = if (lastFrameAt == 0L) 16L else (nowMs - lastFrameAt).coerceIn(1L, 50L)
+        lastFrameAt = nowMs
+        stepCamera(dt.toDouble(), nowMs)
+    }
+
     private fun stepCamera(dt: Double, nowMs: Long) {
         // 平面模式没有自转与惯性：地图是铺开的仪表板，静止才是正确的"性格"。
         if (flatMode) return
@@ -312,7 +331,9 @@ class GlobeRenderer(private val land: FloatArray) {
             flingVel *= 0.5.pow(dt / FLING_HALF_MS)
             if (kotlin.math.abs(flingVel) < 1e-5) flingVel = 0.0
         }
-        spinWeight = if (nowMs - lastDragAt > SPIN_RESUME_MS) {
+        // 哨兵值不能参与减法（见 NEVER_DRAGGED 注释）：从未拖拽时视为空闲无限久。
+        val idleMs = if (lastDragAt == NEVER_DRAGGED) Long.MAX_VALUE else nowMs - lastDragAt
+        spinWeight = if (idleMs > SPIN_RESUME_MS) {
             min(1.0, spinWeight + dt / SPIN_RAMP_MS)
         } else 0.0
         val wobble = 1 + SPIN_WOBBLE * sin(nowMs / SPIN_WOBBLE_MS * PI * 2)
@@ -758,6 +779,13 @@ class GlobeRenderer(private val land: FloatArray) {
      * 否则一条弹道会拉成横穿整张地图的水平线。 */
     private fun tracePath(pts: List<Proj?>, from: Double, to: Double): Path {
         val path = Path()
+        // 区间必须夹进采样点范围再循环。
+        // 弹道刚出生时 fHead≈0、尾巴长度 13，于是 fTail=-13；
+        // 直接拿 ceil(-13) 当索引会去读 pts[-12]，真机上就是一次 ArrayIndexOutOfBounds 崩溃。
+        // 负分数在语义上只是"整条尾巴还没生出来"，夹到 0 即可。
+        val hi = (pts.size - 1).toDouble()
+        val f0 = from.coerceIn(0.0, hi)
+        val f1 = to.coerceIn(0.0, hi)
         var pen = false
         var lastX = 0f
         fun push(p: Proj?) {
@@ -766,14 +794,14 @@ class GlobeRenderer(private val land: FloatArray) {
             if (!pen) { path.moveTo(p.x, p.y); pen = true } else path.lineTo(p.x, p.y)
             lastX = p.x
         }
-        push(lerpPt(pts, from))
-        val last = min(pts.size - 1.0, kotlin.math.floor(to)).toInt()
-        var i = kotlin.math.ceil(from).toInt()
+        push(lerpPt(pts, f0))
+        val last = min(hi, kotlin.math.floor(f1)).toInt()
+        var i = kotlin.math.ceil(f0).toInt()
         while (i <= last) {
-            if (i > from) push(pts[i])
+            if (i > f0) push(pts[i])
             i++
         }
-        if (to > last) push(lerpPt(pts, to))
+        if (f1 > last) push(lerpPt(pts, f1))
         return path
     }
 

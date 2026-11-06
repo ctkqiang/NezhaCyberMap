@@ -53,7 +53,17 @@ class RealtimeClient(
     }
 
     private fun open() {
-        val req = Request.Builder().url(url).build()
+        // url 来自服务器对话框的用户手输：漏 scheme、host 为空、夹了空格，
+        // Request.Builder().url() 会当场抛 IllegalArgumentException。
+        // 主线程上的未捕获异常就是一次进程死亡——把崩溃换成一次可报告的连接失败。
+        // 地址不合法时重试一万次也不会变好，所以停在这里，等用户改正后重新 connect()。
+        val req = try {
+            Request.Builder().url(url).build()
+        } catch (e: IllegalArgumentException) {
+            closedByUser = true
+            scope.launch(Dispatchers.Main) { onConn(false) }
+            return
+        }
         sock = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 retryDelayMs = 1000L

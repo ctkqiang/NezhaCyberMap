@@ -289,4 +289,60 @@ class GeometryTest {
     fun paletteHasExactlyFourSeverities() {
         assertEquals(4, Palette.sev.size)
     }
+
+    // ── 动画：地球必须真的在转 ──
+
+    /**
+     * 一帧都不能动的 bug 就出在这里：lastDragAt 用 Long.MIN_VALUE 表示"从未拖拽"，
+     * 而 nowMs - Long.MIN_VALUE 会溢出成负数，空闲时间恒为负，
+     * 自转权重被永久压成 0 —— 整个画面除了新事件外完全静止。
+     */
+    @Test
+    fun globeRotatesWithoutAnyGesture() {
+        val r = GlobeRenderer(FloatArray(0))
+        r.resize(1080f, 2340f, 321f, 48f)
+
+        val before = r.yaw
+        var t = 1000L
+        repeat(60) {
+            r.advance(t)
+            t += 16L
+        }
+        assertTrue(
+            "60 帧后 yaw 仍是 $before，地球没有自转",
+            kotlin.math.abs(r.yaw - before) > 1e-3,
+        )
+    }
+
+    /** 自转方向必须稳定（yaw 单调减小），不能出现抖动或反向。 */
+    @Test
+    fun globeKeepsSpinningInOneDirection() {
+        val r = GlobeRenderer(FloatArray(0))
+        r.resize(1080f, 2340f, 321f, 48f)
+
+        var t = 1000L
+        var prev = r.yaw
+        repeat(300) { frame ->
+            r.advance(t)
+            assertTrue("第 $frame 帧 yaw 从 $prev 变成 ${r.yaw}，自转方向反了", r.yaw < prev)
+            prev = r.yaw
+            t += 16L
+        }
+    }
+
+    /** 平面模式按设计不自转：地图是铺开的仪表板，静止才是对的。 */
+    @Test
+    fun flatModeStaysStill() {
+        val r = GlobeRenderer(FloatArray(0))
+        r.resize(1080f, 2340f, 321f, 48f)
+        r.toggleFlat()
+
+        val before = r.yaw
+        var t = 1000L
+        repeat(60) {
+            r.advance(t)
+            t += 16L
+        }
+        assertEquals("平面模式不应改变 yaw", before, r.yaw, 0.0)
+    }
 }
