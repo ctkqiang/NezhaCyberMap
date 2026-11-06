@@ -110,12 +110,14 @@ HUD 管理顶栏指标、右侧数据面板与左下事件流。
   const hud = new HUD({
     onPause: (paused) => ws.sendPause(paused),
     onStyle: () => renderer.cycleStyle(),
+    onFlat: () => renderer.toggleFlat(),
   });
 */
 export class HUD {
-  constructor({ onPause, onStyle }) {
+  constructor({ onPause, onStyle, onFlat }) {
     this.onPause = onPause;
     this.onStyle = onStyle;
+    this.onFlat = onFlat || (() => {});
     this.paused = false;
 
     this.btnPause = document.getElementById('btn-pause');
@@ -123,6 +125,9 @@ export class HUD {
 
     const btnStyle = document.getElementById('btn-style');
     if (btnStyle) btnStyle.addEventListener('click', () => this.onStyle());
+
+    const btnFlat = document.getElementById('btn-flat');
+    if (btnFlat) btnFlat.addEventListener('click', () => this.onFlat());
 
     const btnPanel = document.getElementById('btn-panel');
     if (btnPanel) {
@@ -139,6 +144,8 @@ export class HUD {
         this.onPause(!this.paused);
       } else if (e.key === 'v' || e.key === 'V') {
         this.onStyle();
+      } else if (e.key === 'f' || e.key === 'F') {
+        this.onFlat();
       } else if (e.key === 'Escape') {
         document.body.classList.remove('panel-open');
         if (btnPanel) btnPanel.setAttribute('aria-expanded', 'false');
@@ -188,6 +195,26 @@ export class HUD {
     if (!btn) return;
     const lbl = btn.querySelector('.lbl');
     if (lbl) lbl.textContent = name;
+  }
+
+  /*
+  setFlat 更新平面按钮的文案与激活态。
+
+  文案显示"点击后要去哪"（球体模式下写「平面」），
+  平面模式加 active 高亮，让"我现在在哪"一眼可见。
+
+  参数:
+    - isFlat (boolean): 当前是否处于平面视图。
+
+  返回:
+    - 无。
+  */
+  setFlat(isFlat) {
+    const btn = this.q('btn-flat');
+    if (!btn) return;
+    const lbl = btn.querySelector('.lbl');
+    if (lbl) lbl.textContent = isFlat ? '球体' : '平面';
+    btn.classList.toggle('active', isFlat);
   }
 
   /*

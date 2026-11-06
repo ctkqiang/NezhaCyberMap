@@ -133,6 +133,10 @@ const STYLES = [
   { name: '平面', dotScale: 0.9, dotAlpha: 0.95, stars: true, graticule: true, atmosphere: false, light: 0, flat: true },
 ];
 
+// 平面档在表中的下标，以及球体档位的数量（供 cycleStyle 跳过平面档）。
+const FLAT_STYLE_IDX = STYLES.findIndex((s) => s.flat);
+const SPHERE_STYLE_COUNT = STYLES.filter((s) => !s.flat).length;
+
 // 红黑主题调色板（全模块唯一色彩来源）。
 // landFill 与 globe1 的亮度对比度必须 ≥3:1，否则大陆在球面上完全不可见，
 // web/test/renderer.test.mjs 会对此做回归断言。
@@ -211,6 +215,7 @@ export class GlobeRenderer {
     this.yaw = -1.2;          // 初始朝向美洲
     this.pitch = PITCH_BASE;
     this.styleIdx = 0;
+    this._flatReturnIdx = 0;   // 进入平面前的风格档，退出时恢复
     this.dragging = false;
     this.dragX = 0; this.dragY = 0;
     this.lastDragAt = -Infinity;  // 未拖拽过 → 启动即自转
@@ -313,14 +318,37 @@ export class GlobeRenderer {
   }
 
   /*
-  cycleStyle 循环切换视觉风格。
+  cycleStyle 在球体的信息密度档位之间循环（不含平面档）。
+
+  平面是"视图"而非"风格"，由顶栏独立按钮控制；
+  把它混进循环里，用户得点三次才能找到，语义也纠缠不清。
 
   返回:
     - string: 新风格名。
   */
   cycleStyle() {
-    this.styleIdx = (this.styleIdx + 1) % STYLES.length;
+    // 从平面回到球体时，落到标准档，避免"风格"按钮看起来毫无反应。
+    this.styleIdx = this._style.flat ? 0 : (this.styleIdx + 1) % SPHERE_STYLE_COUNT;
     return STYLES[this.styleIdx].name;
+  }
+
+  /*
+  toggleFlat 在球体与平面视图之间切换。
+
+  进入平面时记住原来的风格档，退出时原样恢复——
+  用户从"点阵"切到平面再切回来，不该被重置成"标准"。
+
+  返回:
+    - object: { flat: boolean, name: string } 切换后的视图与风格名。
+  */
+  toggleFlat() {
+    if (this._style.flat) {
+      this.styleIdx = this._flatReturnIdx;
+      return { flat: false, name: STYLES[this.styleIdx].name };
+    }
+    this._flatReturnIdx = this.styleIdx;
+    this.styleIdx = FLAT_STYLE_IDX;
+    return { flat: true, name: STYLES[this.styleIdx].name };
   }
 
   // 当前风格配置。

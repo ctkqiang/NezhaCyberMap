@@ -23,8 +23,14 @@ function main() {
   const hud = new HUD({
     onPause: (paused) => ws.sendPause(paused),
     onStyle: () => hud.setStyleName(renderer.cycleStyle()),
+    onFlat: () => {
+      const view = renderer.toggleFlat();
+      hud.setFlat(view.flat);
+      hud.setStyleName(view.name);
+    },
   });
   hud.setStyleName('标准');
+  hud.setFlat(false);
   ws = new RealtimeClient({
     onWelcome: (events) => {
       renderer.replaceEvents(events);

@@ -284,6 +284,15 @@ noscript {
 }
 .tbtn.paused .ico { color: var(--warn); }
 
+/* 平面视图激活态：蓝色表示"当前处在另一种投影"，
+   与红色告警、琥珀降级在语义上都不冲突。 */
+.tbtn.active {
+  color: var(--sev-0);
+  border-color: rgba(90, 176, 255, 0.42);
+  background: rgba(90, 176, 255, 0.08);
+}
+.tbtn.active .ico { color: var(--sev-0); }
+
 /* 面板开关只在窄屏出现 */
 .narrow-only { display: none; }
 
