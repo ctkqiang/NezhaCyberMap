@@ -130,7 +130,7 @@ const STYLES = [
   { name: '标准', dotScale: 0.78, dotAlpha: 0.92, stars: true, graticule: true, atmosphere: true, light: 1.0 },
   { name: '极简', dotScale: 0.52, dotAlpha: 0.48, stars: false, graticule: false, atmosphere: false, light: 0.5 },
   { name: '点阵', dotScale: 0.34, dotAlpha: 0.62, stars: true, graticule: false, atmosphere: true, light: 1.15 },
-  { name: '平面', dotScale: 0.9, dotAlpha: 0.95, stars: true, graticule: true, atmosphere: false, light: 0, flat: true },
+  { name: '平面', dotScale: 0.62, dotAlpha: 0.88, stars: true, graticule: true, atmosphere: false, light: 0, flat: true },
 ];
 
 // 平面档在表中的下标，以及球体档位的数量（供 cycleStyle 跳过平面档）。
@@ -138,23 +138,29 @@ const FLAT_STYLE_IDX = STYLES.findIndex((s) => s.flat);
 const SPHERE_STYLE_COUNT = STYLES.filter((s) => !s.flat).length;
 
 // 红黑主题调色板（全模块唯一色彩来源）。
+// Mr. Robot 美学：界面本身零彩色，只有威胁数据允许有颜色。
+// 地球因此是灰白点阵（而非霓虹红），既符合"监控终端"的冷感，
+// 也让蓝/绿/橙/红的严重度成为画面里唯一的信息色彩。
 // landFill 与 globe1 的亮度对比度必须 ≥3:1，否则大陆在球面上完全不可见，
 // web/test/renderer.test.mjs 会对此做回归断言。
 export const PALETTE = {
-  skyCore: '#120d14',
-  skyMid: '#09080c',
-  skyEdge: '#050507',
-  globe0: '#3d1420',                    // 球体受光侧（暗红黑）
-  globe1: '#150409',                    // 球体背光侧（比天空亮且偏红，行星必须是实心体）
-  landFill: 'rgba(204, 40, 58, 0.96)',  // 陆地点阵
-  source: 'rgba(255, 244, 246, 0.92)',  // 攻击源环
+  // 天空压到近纯黑，球体才读得出来是一个"实体"。
+  // 之前天空 #0b、球体背光 #0e，两者亮度差不到 3/255——
+  // 屏幕上看到的就是一片点阵浮在虚空里，找不到行星的边界。
+  skyCore: '#060606',
+  skyMid: '#020202',
+  skyEdge: '#000000',
+  globe0: '#262626',                    // 球体受光侧（中性灰）
+  globe1: '#121212',                    // 球体背光侧（必须比天空亮，行星是实心体）
+  landFill: 'rgba(214, 214, 214, 0.94)',// 陆地点阵（灰白）
+  source: 'rgba(255, 255, 255, 0.92)',  // 攻击源环
   sourceCore: 'rgba(255, 255, 255, 0.95)',
-  target: 'rgba(255, 74, 96, 0.95)',    // 目标（蜜罐）环
-  label: 'rgba(255, 200, 208, 0.9)',
+  target: 'rgba(255, 46, 77, 0.95)',    // 目标（蜜罐）环：唯一的常驻红
+  label: 'rgba(226, 226, 226, 0.9)',
   targetLabel: 'rgba(255, 120, 140, 0.72)',
-  star: '#fff4f5',
-  rim: '235, 108, 126',                 // 地平线亮边（RGB 分量，配合 alpha 拼接）
-  grid: 'rgba(255, 110, 130, 0.09)',
+  star: '#e0e0e0',
+  rim: '214, 214, 214',                 // 地平线亮边（RGB 分量，配合 alpha 拼接）
+  grid: 'rgba(255, 255, 255, 0.055)',
 };
 
 /*
@@ -258,17 +264,21 @@ export class GlobeRenderer {
     const panelW = w >= 1180 ? 296 : (w >= 980 ? 268 : 0);
     const areaW = w - panelW;
     this.cx = areaW / 2;
-    this.cy = h * (panelW ? 0.52 : 0.42);
-    // 桌面受限于高度（宽屏下半径由 h 决定），窄屏受限于宽度（由 w 决定），
-    // 两种约束取小值，任何比例下都不会顶到边界。
-    this.r = Math.min(areaW * 0.48, h * (panelW ? 0.40 : 0.36));
+    // 无面板时球心必须再往下让 4%：
+    // 原来的 0.42h 配 0.36h 半径，球顶落在 0.06h（820px 下是 49px），
+    // 直接被 58px 高的顶栏切掉一截。0.46/0.34 之后顶部留到 0.12h，
+    // 底部也空出位置给左下角的事件流。
+    this.cy = h * (panelW ? 0.52 : 0.46);
+    this.r = Math.min(areaW * (panelW ? 0.48 : 0.46), h * (panelW ? 0.40 : 0.34));
 
     // 平面地图矩形：宽受面板外侧可视区约束，高受视口约束，保持 2:1。
     const flatW = Math.min(areaW * 0.94, h * 1.44);
     this.mapW = flatW;
     this.mapH = flatW / 2;
     this.mapX = (areaW - flatW) / 2;
-    this.mapY = (h - this.mapH) * (panelW ? 0.52 : 0.46);
+    // 平面地图整体略上移（0.40 而非 0.46）：把底部让给左下角的事件流，
+    // 否则南极那一条永远压在实时日志下面。
+    this.mapY = (h - this.mapH) * (panelW ? 0.52 : 0.40);
 
     this._buildStars();
     this._updateProjectors();
@@ -496,6 +506,8 @@ export class GlobeRenderer {
       this._paintMapBg();
       if (this._style.graticule) this._paintGraticuleFlat();
       this._paintLandFlat();
+      // 扫描线与角标压在大陆之上：CRT 覆盖感来自"线在图像前面"。
+      this._paintTacticalFrame();
     } else {
       this._paintAtmosphere();
       this._paintSphere();
@@ -573,6 +585,16 @@ export class GlobeRenderer {
     ctx.beginPath();
     ctx.arc(cx, cy, r * 1.03, 0, PI2);
     ctx.fill();
+
+    // 轮廓发丝线：一条 1px 的技术制图轮廓，不是辉光。
+    // 点阵球没有实体填充的边缘，没有这条线，行星的轮廓就"咬"不住背景，
+    // 整块大陆看起来像浮在虚空里的碎片。0.14 的透明度刚好够读出边界，
+    // 又不会形成一圈可以沿着描的亮环。
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r - 0.5, 0, PI2);
+    ctx.stroke();
   }
 
   _paintSphere() {
@@ -602,8 +624,9 @@ export class GlobeRenderer {
     // 网格就不会一路亮到球的轮廓边缘，纵深立刻出来。
     const grid = ctx.createRadialGradient(cx, cy, r * 0.3, cx, cy, r);
     grid.addColorStop(0, PALETTE.grid);
-    grid.addColorStop(0.72, 'rgba(255, 110, 130, 0.062)');
-    grid.addColorStop(1, 'rgba(255, 110, 130, 0.012)');
+    // 经纬网同样是中性白：它是坐标参照，不是装饰，不能带色相。
+    grid.addColorStop(0.72, 'rgba(255, 255, 255, 0.058)');
+    grid.addColorStop(1, 'rgba(255, 255, 255, 0.012)');
     ctx.strokeStyle = grid;
     ctx.lineWidth = 0.7;
 
@@ -716,15 +739,134 @@ export class GlobeRenderer {
     const { ctx, mapX, mapY, mapW, mapH } = this;
     ctx.fillStyle = PALETTE.globe1;
     ctx.fillRect(mapX, mapY, mapW, mapH);
+    // 极淡的上下明暗：只用来把地图从天空里"托"起来，不制造光晕。
     const g = ctx.createLinearGradient(0, mapY, 0, mapY + mapH);
-    g.addColorStop(0, 'rgba(255, 132, 132, 0.05)');
+    g.addColorStop(0, 'rgba(255, 255, 255, 0.030)');
     g.addColorStop(0.5, 'rgba(0, 0, 0, 0)');
-    g.addColorStop(1, 'rgba(0, 0, 0, 0.22)');
+    g.addColorStop(1, 'rgba(0, 0, 0, 0.26)');
     ctx.fillStyle = g;
     ctx.fillRect(mapX, mapY, mapW, mapH);
-    ctx.strokeStyle = 'rgba(235, 108, 126, 0.16)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
     ctx.lineWidth = 1;
     ctx.strokeRect(mapX + 0.5, mapY + 0.5, mapW - 1, mapH - 1);
+  }
+
+  /*
+  _paintTacticalFrame 平面地图的战术覆盖层：扫描线 + 四角括号 + 四边刻度。
+
+  借三角洲/军工 HUD 的语言：
+    - 扫描线给 CRT 质感，但必须极轻（alpha ≤ 0.03），重了就成廉价科幻贴图；
+    - 四角 L 形括号界定"仪表区域"，比整圈描边更像是被框选出来的；
+    - 四边刻度是这一层里唯一有功能的东西：没有度数，平铺世界读起来
+      只是一张带边框的壁纸，而不是一张可以定位的海图。
+  */
+  _paintTacticalFrame() {
+    const { ctx, mapX, mapY, mapW, mapH } = this;
+    const arm = Math.max(14, Math.min(26, mapW * 0.035));
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(mapX, mapY, mapW, mapH);
+    ctx.clip();
+
+    // 扫描线：每 3px 一条 1px 线，整体透明度压到 0.022。
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.022)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let y = mapY + 2; y < mapY + mapH; y += 3) {
+      ctx.moveTo(mapX, y + 0.5);
+      ctx.lineTo(mapX + mapW, y + 0.5);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    // 四角括号：L 形，两端各留出 arm 长度。
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.42)';
+    ctx.lineWidth = 1.25;
+    const x0 = mapX, y0 = mapY, x1 = mapX + mapW, y1 = mapY + mapH;
+    const corners = [
+      [x0, y0, 1, 1],
+      [x1, y0, -1, 1],
+      [x0, y1, 1, -1],
+      [x1, y1, -1, -1],
+    ];
+    ctx.beginPath();
+    for (const [cx0, cy0, sx, sy] of corners) {
+      ctx.moveTo(cx0, cy0 + sy * arm);
+      ctx.lineTo(cx0, cy0);
+      ctx.lineTo(cx0 + sx * arm, cy0);
+    }
+    ctx.stroke();
+
+    this._paintMapRuler();
+  }
+
+  /*
+  _paintMapRuler 平面地图四边的经纬刻度尺。
+
+  每 15° 一道短刻度、30° 一道长刻度，边距足够时才标度数。
+  刻度画在地图矩形之外：压在陆地点阵上会被当成噪声读，放在框外才是刻度。
+  经度随 panLon 平移，所以刻度必须走投影函数取值，不能按固定像素排布。
+  */
+  _paintMapRuler() {
+    const { ctx, mapX, mapY, mapW, mapH, w, h } = this;
+    const left = mapX, right = mapX + mapW;
+    const top = mapY, bottom = mapY + mapH;
+    const gap = 3;      // 刻度与边框之间的呼吸距离
+    const minor = 3;
+    const major = 6;
+
+    // 边距决定放得下什么：窄屏只留刻度，避免数字糊成一团。
+    const marginX = Math.min(left, w - right);
+    const marginY = Math.min(top, h - bottom);
+    const showLonLabel = marginY > 28;
+    const showLatLabel = marginX > 28;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.30)';
+    ctx.lineWidth = 1;
+    ctx.font = '9px ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.40)';
+    ctx.textBaseline = 'middle';
+
+    // ── 经度：上、下两条边 ──
+    ctx.textAlign = 'center';
+    for (let lon = -180; lon <= 180; lon += 15) {
+      const x = Math.round(this.projector(0, lon).x) + 0.5;
+      if (x < left - 1 || x > right + 1) continue;
+      const isMajor = lon % 30 === 0;
+      const len = isMajor ? major : minor;
+      ctx.beginPath();
+      ctx.moveTo(x, top - gap);
+      ctx.lineTo(x, top - gap - len);
+      ctx.moveTo(x, bottom + gap);
+      ctx.lineTo(x, bottom + gap + len);
+      ctx.stroke();
+      if (showLonLabel && isMajor && lon !== 0) {
+        const txt = lon > 0 ? lon + 'E' : (-lon) + 'W';
+        ctx.fillText(txt, x, top - gap - major - 7);
+      }
+    }
+
+    // ── 纬度：左、右两条边 ──
+    ctx.textAlign = 'right';
+    for (let lat = -75; lat <= 75; lat += 15) {
+      const y = Math.round(this.projector(lat, 0).y) + 0.5;
+      if (y < top - 1 || y > bottom + 1) continue;
+      const isMajor = lat % 30 === 0;
+      const len = isMajor ? major : minor;
+      ctx.beginPath();
+      ctx.moveTo(left - gap, y);
+      ctx.lineTo(left - gap - len, y);
+      ctx.moveTo(right + gap, y);
+      ctx.lineTo(right + gap + len, y);
+      ctx.stroke();
+      if (showLatLabel && isMajor) {
+        const txt = lat === 0 ? '0' : (lat > 0 ? lat + 'N' : (-lat) + 'S');
+        ctx.fillText(txt, left - gap - major - 6, y);
+      }
+    }
+    ctx.restore();
   }
 
   /*
@@ -788,6 +930,28 @@ export class GlobeRenderer {
     }
 
     ctx.restore();
+
+    // 极区淡出。
+    // 等距圆柱投影下，极区陆地本来就横贯全图：南极圈覆盖所有经度，
+    // 北极圈（西伯利亚 + 加拿大 + 格陵兰）也几乎首尾相接。
+    // 这是投影的固有特征，不是采样错误——真正的解法是海图惯例：
+    // 上下各 13% 用底色渐隐，并把中点透明度推到 0.92，
+    // 否则线性渐变在带中间只剩一半遮罩，那条白带依然抢眼。
+    const fadeH = mapH * 0.13;
+    const topFade = ctx.createLinearGradient(0, mapY, 0, mapY + fadeH);
+    topFade.addColorStop(0, 'rgba(16, 16, 16, 1)');
+    topFade.addColorStop(0.35, 'rgba(16, 16, 16, 0.92)');
+    topFade.addColorStop(1, 'rgba(16, 16, 16, 0)');
+    ctx.fillStyle = topFade;
+    ctx.fillRect(mapX, mapY, mapW, fadeH);
+
+    const botFade = ctx.createLinearGradient(0, mapY + mapH - fadeH, 0, mapY + mapH);
+    botFade.addColorStop(0, 'rgba(16, 16, 16, 0)');
+    botFade.addColorStop(0.65, 'rgba(16, 16, 16, 0.92)');
+    botFade.addColorStop(1, 'rgba(16, 16, 16, 1)');
+    ctx.fillStyle = botFade;
+    ctx.fillRect(mapX, mapY + mapH - fadeH, mapW, fadeH);
+
     ctx.globalAlpha = 1;
   }
 
@@ -804,9 +968,12 @@ export class GlobeRenderer {
     const PI2 = Math.PI * 2;
 
     const lx = cx - r * 0.62, ly = cy - r * 0.62;
+    // 光源必须是中性白。旧版用带红的高光（255,132,132），
+    // 在一颗灰白点阵球上会烧出一层脏粉色雾——画面立刻从"仪表"退化成"滤镜"。
+    // 灰阶方案里，亮度只能由明度表达，不能借色相。
     const light = ctx.createRadialGradient(lx, ly, r * 0.04, lx, ly, r * 1.65);
-    light.addColorStop(0, 'rgba(255, 132, 132,' + (0.15 * L).toFixed(3) + ')');
-    light.addColorStop(0.5, 'rgba(255, 84, 84,' + (0.045 * L).toFixed(3) + ')');
+    light.addColorStop(0, 'rgba(255, 255, 255,' + (0.125 * L).toFixed(3) + ')');
+    light.addColorStop(0.5, 'rgba(255, 255, 255,' + (0.038 * L).toFixed(3) + ')');
     light.addColorStop(1, 'rgba(0, 0, 0, 0)');
     ctx.fillStyle = light;
     ctx.beginPath();

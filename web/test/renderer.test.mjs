@@ -94,7 +94,12 @@ export async function testRenderer(ok) {
     parseInt(PALETTE.globe1.slice(1), 16) & 255];
   const ratio = (lum(fillRGB) + 0.05) / (lum(baseRGB) + 0.05);
   ok(ratio >= 3, '大陆与球底对比度 ≥ 3:1（实际 ' + ratio.toFixed(2) + '）');
-  ok(fillRGB[0] > 120 && fillRGB[1] < 80 && fillRGB[2] < 80, '大陆填充为红色系（RGB ' + fillRGB + '）');
+  // Mr. Robot 美学：大陆是中性灰白，不含色相——
+  // 画面里唯一允许有颜色的是威胁数据（弹道与严重度标记）。
+  ok(
+    fillRGB[0] > 180 && Math.abs(fillRGB[0] - fillRGB[2]) < 24,
+    '大陆填充为中性灰白（RGB ' + fillRGB + '）',
+  );
 
   // 原始投影（不剔除背面）：深度符号与可见性一致。
   const raw = makeProjectorRaw(720, 450, 378, -1.2, 0.46);
