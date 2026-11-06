@@ -60,11 +60,11 @@ import kotlinx.coroutines.launch
 private const val SERVER_URL = "ws://10.0.2.2:8148/ws"
 
 private val DarkScheme = darkColorScheme(
-    background = Color(0xFF050507),
-    surface = Color(0xFF120D14),
-    primary = Color(0xFFFF4A60),
-    onBackground = Color(0xFFFFEEF2),
-    onSurface = Color(0xFFFFEEF2),
+    background = Color(0xFF080808),
+    surface = Color(0xFF101010),
+    primary = Color(0xFFFF2E4D),
+    onBackground = Color(0xFFDCDCDC),
+    onSurface = Color(0xFFDCDCDC),
 )
 
 class MainActivity : ComponentActivity() {
@@ -210,7 +210,7 @@ private fun TopBar(
         TextButton(onClick = onServerClick) {
             Text(
                 if (demoMode) "◐ 演示模式" else if (connected) "● 已连接" else "○ 未连接",
-                color = if (connected) Color(0xFF3DD68C) else if (demoMode) Color(0xFFFFB3C0) else Color(0xFFFF4A60),
+                color = if (connected) Color(0xFF3DD68C) else if (demoMode) Color(0xFF8A8A8A) else Color(0xFFFF2E4D),
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
             )
@@ -231,7 +231,7 @@ private fun TopBar(
 @Composable
 private fun StatItem(label: String, value: String) {
     Column {
-        Text(label, color = Color(0xFF8A6A72), fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+        Text(label, color = Color(0xFF8A8A8A), fontSize = 9.sp, fontFamily = FontFamily.Monospace)
         Text(value, color = Palette.headGlow, fontSize = 16.sp, fontFamily = FontFamily.Monospace)
     }
 }
@@ -251,7 +251,7 @@ private fun EventLog(log: List<AttackEvent>, modifier: Modifier) {
         for (ev in log) {
             Text(
                 "${ev.raw.ifBlank { ev.src.ip }}  ${ev.src.name} → ${ev.dst.name}",
-                color = Color(0xFFC8909A),
+                color = Color(0xFF8A8A8A),
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
@@ -266,8 +266,8 @@ private fun FeedStatus(feeds: Map<String, FeedItem>, modifier: Modifier) {
         for ((key, f) in feeds.entries.take(4)) {
             val c = when (f.state) {
                 1 -> Color(0xFF3DD68C)
-                2 -> Color(0xFFFF4A60)
-                else -> Color(0xFF8A6A72)
+                2 -> Color(0xFFFF2E4D)
+                else -> Color(0xFF8A8A8A)
             }
             Text("${f.name.ifBlank { key}} · ${stateName(f.state)}", color = c, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
         }

@@ -66,19 +66,23 @@ private const val RIPPLE_MS = 2400L
 private const val REPLAY_STEP_MS = 150L
 private const val MAX_EVENTS = 64
 
-// ── 调色板（球体为实心体；严重度四色：蓝/绿/橙/红，与 Web 端 SEV.colors 对齐）──
+// ── 调色板（与 Web 端 PALETTE 同源）──
+// Mr. Robot 美学：界面本身零彩色，只有威胁数据允许有颜色。
+// 地球因此是灰白点阵，天空压到近纯黑——球体必须读得出"实体"的边界，
+// 否则整片大陆看起来只是浮在虚空里的点。
 object Palette {
-    val skyCore = Color(0xFF120D14)
-    val skyEdge = Color(0xFF050507)
-    val globe0 = Color(0xFF3D1420)
-    val globe1 = Color(0xFF150409)
-    val land = Color(0xF5CC283A)
-    val source = Color(0xEBFFF4F6)
-    val target = Color(0xF2FF4A60)
-    val label = Color(0xE6FFC8D0)
-    val grid = Color(0x17FF6E82)
-    val headCore = Color(0xFFFFF8FA)
-    val headGlow = Color(0xFFFFEEF2)
+    val skyCore = Color(0xFF060606)
+    val skyEdge = Color(0xFF000000)
+    val globe0 = Color(0xFF262626)   // 球体受光侧（中性灰）
+    val globe1 = Color(0xFF121212)   // 球体背光侧（比天空亮，行星是实心体）
+    val land = Color(0xFFD6D6D6)     // 陆地点阵（灰白）
+    val source = Color(0xEBFFFFFF)   // 攻击源环
+    val target = Color(0xF2FF2E4D)   // 目标（蜜罐）环：唯一的常驻红
+    val label = Color(0xE6E2E2E2)
+    val grid = Color(0x0EFFFFFF)     // 经纬网：白 5.5%，不带色相
+    val rim = Color(0x24FFFFFF)      // 地平线发丝线
+    val headCore = Color(0xFFFFFFFF)
+    val headGlow = Color(0xFFF0F0F0)
     val sev = listOf(
         Color(0xFF5AB0FF), // 低
         Color(0xFF3DD68C), // 中
@@ -230,6 +234,8 @@ class GlobeRenderer(private val land: FloatArray) {
             paintMapBg()
             paintGraticuleFlat(proj)
             paintLandFlat(proj)
+            // 战术覆盖层压在地形之上、弹道之下：仪器边框属于界面，弹道属于数据。
+            paintTacticalFrame(proj)
             paintTrails(proj, nowMs)
             paintSeeds(proj, nowMs)
         } else {
@@ -265,19 +271,20 @@ class GlobeRenderer(private val land: FloatArray) {
 
     // ── 平面模式绘制 ──
 
-    /** 平面地图底板：比天空略亮，顶部一层极淡受光、底部收暗，外描一道细边。 */
+    /** 平面地图底板：比天空略亮，顶部一层极淡受光、底部收暗，外描一道白色细边。 */
     private fun DrawScope.paintMapBg() {
-        val rect = androidx.compose.ui.geometry.Rect(mapX, mapY, mapX + mapW, mapY + mapH)
         drawRect(Palette.globe1, topLeft = Offset(mapX, mapY), size = androidx.compose.ui.geometry.Size(mapW, mapH))
+        // 受光/收暗必须是中性白与纯黑：旧版用 0x0DFF8484（带红的高光），
+        // 在灰白点阵上会烧出一层脏粉色雾，画面立刻从"仪表"退化成"滤镜"。
         drawRect(
             brush = Brush.verticalGradient(
-                0f to Color(0x0DFF8484), 0.5f to Color.Transparent, 1f to Color(0x38000000),
+                0f to Color(0x08FFFFFF), 0.5f to Color.Transparent, 1f to Color(0x42000000),
                 startY = mapY, endY = mapY + mapH,
             ),
             topLeft = Offset(mapX, mapY),
             size = androidx.compose.ui.geometry.Size(mapW, mapH),
         )
-        drawRect(Color(0x29EB6C7E), topLeft = Offset(mapX, mapY), size = androidx.compose.ui.geometry.Size(mapW, mapH), style = Stroke(1f))
+        drawRect(Color(0x24FFFFFF), topLeft = Offset(mapX, mapY), size = androidx.compose.ui.geometry.Size(mapW, mapH), style = Stroke(1f))
     }
 
     /** 平面经纬网：经纬各 30° 的直线网格。 */
@@ -300,7 +307,9 @@ class GlobeRenderer(private val land: FloatArray) {
      */
     private fun DrawScope.paintLandFlat(proj: IProjector) {
         if (landLL.isEmpty()) return
-        val base = max(1f, mapW / 360f * LAND_STEP_DEG.toFloat() * 0.9f)
+        // 0.62 而非 0.9：等距圆柱投影下点间距就是 base/0.9，
+        // 点径占到间距的九成时相邻点会粘连，整个欧亚大陆糊成一块实心白。
+        val base = max(1f, mapW / 360f * LAND_STEP_DEG.toFloat() * 0.62f)
         val jf = 0.35f * base
         clipPath(Path().apply { addRect(androidx.compose.ui.geometry.Rect(mapX, mapY, mapX + mapW, mapY + mapH)) }) {
             var idx = 0
@@ -311,13 +320,94 @@ class GlobeRenderer(private val land: FloatArray) {
                 val x = p.x + landJx[idx] * jf
                 val y = p.y + landJy[idx] * jf
                 drawRect(
-                    color = Palette.land.copy(alpha = 0.95f),
+                    color = Palette.land.copy(alpha = 0.88f),
                     topLeft = Offset(x - s * 0.5f, y - s * 0.5f),
                     size = androidx.compose.ui.geometry.Size(s, s),
                 )
                 i += 2
                 idx++
             }
+        }
+
+        // 极区淡出：等距圆柱投影下南极圈覆盖所有经度、北极圈陆地几乎首尾相接，
+        // 这是投影的固有特征而非采样错误。按海图惯例上下各 13% 用底色渐隐，
+        // 并把中点透明度推到 0.92，否则线性渐变在带中间只剩一半遮罩，
+        // 那条横贯全图的白带依然抢眼。
+        val fadeH = mapH * 0.13f
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to Color(0xFF101010), 0.35f to Color(0xEB101010), 1f to Color(0x00101010),
+                startY = mapY, endY = mapY + fadeH,
+            ),
+            topLeft = Offset(mapX, mapY),
+            size = androidx.compose.ui.geometry.Size(mapW, fadeH),
+        )
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to Color(0x00101010), 0.65f to Color(0xEB101010), 1f to Color(0xFF101010),
+                startY = mapY + mapH - fadeH, endY = mapY + mapH,
+            ),
+            topLeft = Offset(mapX, mapY + mapH - fadeH),
+            size = androidx.compose.ui.geometry.Size(mapW, fadeH),
+        )
+    }
+
+    /**
+     * 平面地图的战术覆盖层：扫描线 + 四角 L 形括号 + 四边经纬刻度。
+     *
+     * 借三角洲/军工 HUD 的语言：
+     *   - 扫描线给 CRT 质感，必须极轻（alpha ≈ 0.02），重了就成廉价科幻贴图；
+     *   - 四角括号界定"仪表区域"，比整圈描边更像是被框选出来的；
+     *   - 四边刻度是这一层里唯一有功能的东西：没有度数，
+     *     平铺世界读起来只是一张带边框的壁纸，而不是一张可以定位的海图。
+     */
+    private fun DrawScope.paintTacticalFrame(proj: IProjector) {
+        // 扫描线（压在大陆之上：CRT 的覆盖感来自"线在图像前面"）。
+        val scan = Color(0x05FFFFFF)
+        var sy = mapY + 2f
+        while (sy < mapY + mapH) {
+            drawLine(scan, Offset(mapX, sy), Offset(mapX + mapW, sy), strokeWidth = 1f)
+            sy += 4f
+        }
+
+        // 四角 L 形括号。
+        val arm = (mapW * 0.035f).coerceIn(14f, 26f)
+        val bracket = Color(0x6BFFFFFF)
+        val x0 = mapX
+        val y0 = mapY
+        val x1 = mapX + mapW
+        val y1 = mapY + mapH
+        val corners = arrayOf(
+            floatArrayOf(x0, y0, 1f, 1f),
+            floatArrayOf(x1, y0, -1f, 1f),
+            floatArrayOf(x0, y1, 1f, -1f),
+            floatArrayOf(x1, y1, -1f, -1f),
+        )
+        for (c in corners) {
+            val path = Path()
+            path.moveTo(c[0], c[1] + c[3] * arm)
+            path.lineTo(c[0], c[1])
+            path.lineTo(c[0] + c[2] * arm, c[1])
+            drawPath(path, bracket, style = Stroke(width = 1.5f))
+        }
+
+        // 经纬刻度：每 15° 一短划、30° 一长划，画在边框之外，不压地形。
+        val tick = Color(0x4DFFFFFF)
+        val minor = 3f
+        val major = 6f
+        for (lon in -180..180 step 15) {
+            val x = proj.project(0.0, lon.toDouble())!!.x
+            if (x < mapX - 1f || x > mapX + mapW + 1f) continue
+            val len = if (lon % 30 == 0) major else minor
+            drawLine(tick, Offset(x, mapY - 3f), Offset(x, mapY - 3f - len), strokeWidth = 1f)
+            drawLine(tick, Offset(x, mapY + mapH + 3f), Offset(x, mapY + mapH + 3f + len), strokeWidth = 1f)
+        }
+        for (lat in -75..75 step 15) {
+            val y = proj.project(lat.toDouble(), 0.0)!!.y
+            if (y < mapY - 1f || y > mapY + mapH + 1f) continue
+            val len = if (lat % 30 == 0) major else minor
+            drawLine(tick, Offset(mapX - 3f, y), Offset(mapX - 3f - len, y), strokeWidth = 1f)
+            drawLine(tick, Offset(mapX + mapW + 3f, y), Offset(mapX + mapW + 3f + len, y), strokeWidth = 1f)
         }
     }
 
@@ -415,6 +505,10 @@ class GlobeRenderer(private val land: FloatArray) {
             radius = radius,
             center = Offset(cx, cy),
         )
+        // 轮廓发丝线：一条技术制图的轮廓，不是辉光。
+        // 点阵球没有实体填充的边缘，缺了这条线，行星轮廓就"咬"不住背景，
+        // 整块大陆看起来像浮在虚空里的碎片。
+        drawCircle(color = Palette.rim, radius = radius - 0.5f, center = Offset(cx, cy), style = Stroke(1f))
     }
 
     // ── 弹道 ──
