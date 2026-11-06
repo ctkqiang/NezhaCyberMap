@@ -61,8 +61,7 @@ class DemoFeed(
     private fun randomEvent(): AttackEvent {
         val src = origins[Random.nextInt(origins.size)]
         val dst = targets[Random.nextInt(targets.size)]
-        // 指数分布：p(0)≈0.50, p(1)≈0.25, p(2)≈0.15, p(3+)≈0.10
-        val sev = (-Math.log(1 - Random.nextDouble()) * 1.6).toInt().coerceIn(0, 4)
+        val sev = demoSeverity(Random.nextDouble())
         return AttackEvent(
             ts = System.currentTimeMillis(),
             src = src,
@@ -73,3 +72,14 @@ class DemoFeed(
         )
     }
 }
+
+/**
+ * 指数分布严重度：低危居多、严重稀少。
+ *
+ * 上界必须收到 3：调色板只有 0..3 四档，4 会被 getOrElse 兜底成最低档的蓝色，
+ * 一个本该刺眼的严重攻击反而渲染成无害扫描。
+ *
+ * 抽成顶层纯函数只为可测：单元测试要遍历整个 [0,1) 区间，把分布尾部逼出来。
+ */
+internal fun demoSeverity(u: Double): Int =
+    (-Math.log(1 - u) * 1.6).toInt().coerceIn(0, 3)

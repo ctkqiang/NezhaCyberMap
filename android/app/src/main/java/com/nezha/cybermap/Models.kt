@@ -92,7 +92,9 @@ object Protocol {
         ts = o.optLong("ts"),
         src = parsePoint(o.getJSONObject("src")),
         dst = parsePoint(o.getJSONObject("dst")),
-        sev = o.optInt("sev"),
+        // 后端严重度是 0..3 四档。越界值若原样传下去，渲染侧的 getOrElse
+        // 会兜底成最低档的蓝色——一次严重攻击看起来像无害扫描。
+        sev = o.optInt("sev").coerceIn(0, 3),
         feed = o.optString("feed"),
         raw = o.optString("raw"),
         // welcome 回放由调用方按序重新分配 bornAt；实时事件用本地时钟。
@@ -103,8 +105,9 @@ object Protocol {
         ip = o.optString("ip"),
         code = o.optString("code"),
         name = o.optString("name"),
-        lat = o.optDouble("lat"),
-        lon = o.optDouble("lon"),
+        // optDouble 无默认值时缺字段会返回 NaN，一路传进 asin() 就是整帧黑屏。
+        lat = o.optDouble("lat", 0.0),
+        lon = o.optDouble("lon", 0.0),
     )
 
     private fun parseStats(o: JSONObject): StatsSnapshot {

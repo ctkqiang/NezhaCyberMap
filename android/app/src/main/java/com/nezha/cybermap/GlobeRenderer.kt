@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -114,20 +115,42 @@ class GlobeRenderer(private val land: FloatArray) {
     private var lastFrameAt = 0L
     private var lastMoveAt = 0L
 
-    private var cx = 0f
-    private var cy = 0f
-    private var radius = 0f
+    // 几何量对同模块的 JVM 单元测试可见（internal 而非 private）：
+    // 布局是否压到顶栏、平面图是否真的铺开，只能靠断言数值来证明，
+    // 不该靠"看着还行"。这不是测试钩子，renderer 自己也在读同一组值。
+    internal var cx = 0f
+    internal var cy = 0f
+    internal var radius = 0f
 
     // ── 平面地图模式（类卡巴斯基平铺视图）──
     var flatMode = false
         private set
-    private var panLon = 0.0        // 视图中心经度偏移（度）
-    private var mapX = 0f
-    private var mapY = 0f
-    private var mapW = 0f
-    private var mapH = 0f
+    internal var panLon = 0.0        // 视图中心经度偏移（度）
+    internal var mapX = 0f
+    internal var mapY = 0f
+    internal var mapW = 0f
+    internal var mapH = 0f
     // 弹道描边的横向跳变阈值：球体模式正无穷（永不触发），平面模式为半图宽。
     private var jumpX = Float.POSITIVE_INFINITY
+
+    // 装饰框 = 地图矩形 ∩ 画布矩形。
+    // 竖屏时地图按高度铺开、横向溢出屏幕（像一张真正铺开的海图），
+    // 四角括号与刻度必须贴着屏幕边缘画，否则整圈边框会跑到画布外面去。
+    private var frameX = 0f
+    private var frameY = 0f
+    private var frameW = 0f
+    private var frameH = 0f
+
+    // 刻度数字走原生 Canvas：Compose 的 drawText 需要 TextMeasurer，
+    // 而这里每帧只画十来个短标签，原生 Paint 更轻也更省事。
+    // lazy 而非直接初始化：Paint 是 Android 类，构造它会把 renderer 绑死在设备上，
+    // 而几何计算需要在 JVM 单元测试里跑起来。
+    private val tickPaint by lazy {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x66FFFFFF
+            typeface = android.graphics.Typeface.MONOSPACE
+        }
+    }
 
     /** 切换球体/平面视图；返回切换后的模式。 */
     fun toggleFlat(): Boolean {
@@ -158,16 +181,39 @@ class GlobeRenderer(private val land: FloatArray) {
         }
     }
 
-    fun resize(w: Float, h: Float) {
+    /**
+     * 更新视口几何。
+     *
+     * @param w           画布宽（px）
+     * @param h           画布高（px）
+     * @param topInset    顶部占用高度（状态栏 + 顶栏），球体与地图都必须让开
+     * @param bottomInset 底部占用高度（手势导航条）
+     */
+    fun resize(w: Float, h: Float, topInset: Float = 0f, bottomInset: Float = 0f) {
+        val avail = max(1f, h - topInset - bottomInset)
+        val portrait = h > w
+
         cx = w / 2f
-        cy = h * 0.46f
-        radius = min(w * 0.46f, h * 0.38f)
-        // 平面地图矩形：宽受视口宽约束，高受视口约束，保持 2:1。
-        val fw = min(w * 0.96f, h * 1.44f)
-        mapW = fw
-        mapH = fw / 2f
-        mapX = (w - fw) / 2f
-        mapY = (h - mapH) * 0.46f
+        cy = topInset + avail * if (portrait) 0.46f else 0.50f
+        // 半径只按"可用高度"算：旧版用整屏高度，横屏时球顶会钻进顶栏底下。
+        radius = min(w * 0.46f, avail * if (portrait) 0.36f else 0.42f)
+
+        if (portrait) {
+            // 竖屏：等距圆柱投影是刚性的 2:1，按宽度铺就只有屏幕四分之一高，
+            // 看上去像一张邮票。改为按高度铺开、横向溢出屏幕，用手势平移浏览——
+            // 这才是手机上看平铺世界地图的正确姿势。
+            mapH = min(avail * 0.56f, w * 0.92f)
+            mapW = mapH * 2f
+            mapX = (w - mapW) / 2f
+            mapY = topInset + (avail - mapH) * 0.42f
+        } else {
+            // 横屏：宽度与高度都不溢出，整张海图一眼看完。
+            val fw = min(w * 0.94f, avail * 1.44f)
+            mapW = fw
+            mapH = fw / 2f
+            mapX = (w - fw) / 2f
+            mapY = topInset + (avail - mapH) * 0.46f
+        }
     }
 
     // ── 事件 ──
@@ -226,11 +272,19 @@ class GlobeRenderer(private val land: FloatArray) {
         val dt = if (lastFrameAt == 0L) 16L else (nowMs - lastFrameAt).coerceIn(1L, 50L)
         lastFrameAt = nowMs
         stepCamera(dt.toDouble(), nowMs)
+        // 投影每帧都在变（自转、拖拽、平移），弧线采样点必须跟着重算。
+        // 漏了这一步，弹道会冻在首次投影的位置：地球转走了，轨迹还留在原地。
+        arcCache.clear()
 
         paintSky()
         if (flatMode) {
             val proj = FlatProjector(mapX, mapY, mapW, mapH, panLon)
             jumpX = mapW / 2f
+            // 装饰框取地图与画布的交集：竖屏横向溢出时，括号和刻度贴着屏幕边。
+            frameX = max(0f, mapX)
+            frameY = max(0f, mapY)
+            frameW = max(0f, min(size.width, mapX + mapW) - frameX)
+            frameH = max(0f, min(size.height, mapY + mapH) - frameY)
             paintMapBg()
             paintGraticuleFlat(proj)
             paintLandFlat(proj)
@@ -273,18 +327,20 @@ class GlobeRenderer(private val land: FloatArray) {
 
     /** 平面地图底板：比天空略亮，顶部一层极淡受光、底部收暗，外描一道白色细边。 */
     private fun DrawScope.paintMapBg() {
-        drawRect(Palette.globe1, topLeft = Offset(mapX, mapY), size = androidx.compose.ui.geometry.Size(mapW, mapH))
+        if (frameW <= 0f || frameH <= 0f) return
+        val area = androidx.compose.ui.geometry.Size(frameW, frameH)
+        drawRect(Palette.globe1, topLeft = Offset(frameX, frameY), size = area)
         // 受光/收暗必须是中性白与纯黑：旧版用 0x0DFF8484（带红的高光），
         // 在灰白点阵上会烧出一层脏粉色雾，画面立刻从"仪表"退化成"滤镜"。
         drawRect(
             brush = Brush.verticalGradient(
                 0f to Color(0x08FFFFFF), 0.5f to Color.Transparent, 1f to Color(0x42000000),
-                startY = mapY, endY = mapY + mapH,
+                startY = frameY, endY = frameY + frameH,
             ),
-            topLeft = Offset(mapX, mapY),
-            size = androidx.compose.ui.geometry.Size(mapW, mapH),
+            topLeft = Offset(frameX, frameY),
+            size = area,
         )
-        drawRect(Color(0x24FFFFFF), topLeft = Offset(mapX, mapY), size = androidx.compose.ui.geometry.Size(mapW, mapH), style = Stroke(1f))
+        drawRect(Color(0x24FFFFFF), topLeft = Offset(frameX, frameY), size = area, style = Stroke(1f))
     }
 
     /** 平面经纬网：经纬各 30° 的直线网格。 */
@@ -316,6 +372,13 @@ class GlobeRenderer(private val land: FloatArray) {
             var i = 0
             while (i < landLL.size) {
                 val p = proj.project(landLL[i].toDouble(), landLL[i + 1].toDouble())!!
+                // 竖屏地图横向溢出屏幕时，将近一半的点落在可视区之外。
+                // 每点一次 drawRect 都要过一遍绘制管线，先剔掉再看，帧率直接翻倍。
+                if (p.x < -base || p.x > size.width + base) {
+                    i += 2
+                    idx++
+                    continue
+                }
                 val s = base * landSize[idx]
                 val x = p.x + landJx[idx] * jf
                 val y = p.y + landJy[idx] * jf
@@ -362,26 +425,28 @@ class GlobeRenderer(private val land: FloatArray) {
      *     平铺世界读起来只是一张带边框的壁纸，而不是一张可以定位的海图。
      */
     private fun DrawScope.paintTacticalFrame(proj: IProjector) {
+        if (frameW <= 0f || frameH <= 0f) return
+        val fx0 = frameX
+        val fy0 = frameY
+        val fx1 = frameX + frameW
+        val fy1 = frameY + frameH
+
         // 扫描线（压在大陆之上：CRT 的覆盖感来自"线在图像前面"）。
         val scan = Color(0x05FFFFFF)
-        var sy = mapY + 2f
-        while (sy < mapY + mapH) {
-            drawLine(scan, Offset(mapX, sy), Offset(mapX + mapW, sy), strokeWidth = 1f)
+        var sy = fy0 + 2f
+        while (sy < fy1) {
+            drawLine(scan, Offset(fx0, sy), Offset(fx1, sy), strokeWidth = 1f)
             sy += 4f
         }
 
         // 四角 L 形括号。
-        val arm = (mapW * 0.035f).coerceIn(14f, 26f)
+        val arm = (min(frameW, frameH) * 0.08f).coerceIn(14f, 26f)
         val bracket = Color(0x6BFFFFFF)
-        val x0 = mapX
-        val y0 = mapY
-        val x1 = mapX + mapW
-        val y1 = mapY + mapH
         val corners = arrayOf(
-            floatArrayOf(x0, y0, 1f, 1f),
-            floatArrayOf(x1, y0, -1f, 1f),
-            floatArrayOf(x0, y1, 1f, -1f),
-            floatArrayOf(x1, y1, -1f, -1f),
+            floatArrayOf(fx0, fy0, 1f, 1f),
+            floatArrayOf(fx1, fy0, -1f, 1f),
+            floatArrayOf(fx0, fy1, 1f, -1f),
+            floatArrayOf(fx1, fy1, -1f, -1f),
         )
         for (c in corners) {
             val path = Path()
@@ -392,22 +457,41 @@ class GlobeRenderer(private val land: FloatArray) {
         }
 
         // 经纬刻度：每 15° 一短划、30° 一长划，画在边框之外，不压地形。
+        // 只有边框外侧确实留出空间时才标数字，否则标签会骑到屏幕上。
         val tick = Color(0x4DFFFFFF)
         val minor = 3f
         val major = 6f
+        val showLon = fy0 > 26f
+        val showLat = fx0 > 26f
+        val nc = drawContext.canvas.nativeCanvas
+        tickPaint.textSize = 9f * density
+
+        tickPaint.textAlign = android.graphics.Paint.Align.CENTER
         for (lon in -180..180 step 15) {
             val x = proj.project(0.0, lon.toDouble())!!.x
-            if (x < mapX - 1f || x > mapX + mapW + 1f) continue
-            val len = if (lon % 30 == 0) major else minor
-            drawLine(tick, Offset(x, mapY - 3f), Offset(x, mapY - 3f - len), strokeWidth = 1f)
-            drawLine(tick, Offset(x, mapY + mapH + 3f), Offset(x, mapY + mapH + 3f + len), strokeWidth = 1f)
+            if (x < fx0 - 1f || x > fx1 + 1f) continue
+            val isMajor = lon % 30 == 0
+            val len = if (isMajor) major else minor
+            drawLine(tick, Offset(x, fy0 - 3f), Offset(x, fy0 - 3f - len), strokeWidth = 1f)
+            drawLine(tick, Offset(x, fy1 + 3f), Offset(x, fy1 + 3f + len), strokeWidth = 1f)
+            if (showLon && isMajor && lon != 0) {
+                val txt = if (lon > 0) "${lon}E" else "${-lon}W"
+                nc.drawText(txt, x, fy0 - 3f - major - 4f, tickPaint)
+            }
         }
+
+        tickPaint.textAlign = android.graphics.Paint.Align.RIGHT
         for (lat in -75..75 step 15) {
             val y = proj.project(lat.toDouble(), 0.0)!!.y
             if (y < mapY - 1f || y > mapY + mapH + 1f) continue
-            val len = if (lat % 30 == 0) major else minor
-            drawLine(tick, Offset(mapX - 3f, y), Offset(mapX - 3f - len, y), strokeWidth = 1f)
-            drawLine(tick, Offset(mapX + mapW + 3f, y), Offset(mapX + mapW + 3f + len, y), strokeWidth = 1f)
+            val isMajor = lat % 30 == 0
+            val len = if (isMajor) major else minor
+            drawLine(tick, Offset(fx0 - 3f, y), Offset(fx0 - 3f - len, y), strokeWidth = 1f)
+            drawLine(tick, Offset(fx1 + 3f, y), Offset(fx1 + 3f + len, y), strokeWidth = 1f)
+            if (showLat && isMajor) {
+                val txt = if (lat == 0) "0" else if (lat > 0) "${lat}N" else "${-lat}S"
+                nc.drawText(txt, fx0 - 3f - major - 2f, y + 3f, tickPaint)
+            }
         }
     }
 
@@ -697,7 +781,6 @@ class GlobeRenderer(private val land: FloatArray) {
 
     private fun DrawScope.paintSeeds(proj: IProjector, nowMs: Long) {
         val recent = events.takeLast(SEED_MAX)
-        val newestFrom = recent.size - SEED_TARGET_MAX
         for ((i, ev) in recent.withIndex()) {
             val age = (nowMs - ev.bornAtMs).coerceAtLeast(0L)
             val life = max(0.0, 1.0 - age.toDouble() / SEED_LIFE_MS)
